@@ -57,9 +57,9 @@ function move(command, face = {}) {
 const navigator = new Navigator((command) => move(command), savedMotion);
 
 // The robot pose shown and used for navigation comes from a Kalman filter over the tracker's detections
-// (pose-filter.mjs). markerHeight is the height of the robot's marker above the floor in cm. 11 is an estimate from
-// recordings: measure it with a ruler and set it with POST /drive {"markerHeight": ...}.
-const poseFilter = new PoseFilter(navigator.motion, { markerHeight: drive.markerHeight ?? 11 });
+// (pose-filter.mjs). markerHeight is the height of the robot's marker above the floor in cm: 10.5, measured on the
+// standing robot. Change it with POST /drive {"markerHeight": ...}.
+const poseFilter = new PoseFilter(navigator.motion, { markerHeight: drive.markerHeight ?? 10.5 });
 let filteredAt = null, lastAcceptedAt = 0;
 function onTrackerFrame(frame) {
   const command = drive.mode === "software" ? gaitEngine.command : MOVES.includes(robotState?.command) ? robotState.command : "";

@@ -8,9 +8,9 @@ import { WebSocketServer } from "ws";
 import { floorToPixel } from "../pi/client/floor.js";
 
 const camera = { f: 1693, cx: 1152, cy: 648, rvec: [Math.PI, 0, 0], tvec: [-38, 30, 130] };  // straight down from 130 cm over (38, 30)
-let robotPose = { x: 38, y: 30, z: 11, heading: 90 };
+let robotPose = { x: 38, y: 30, z: 10.5, heading: 90 };
 const startedAt = Date.now();
-const robotWithPixel = () => { const p = floorToPixel(camera, robotPose.x, robotPose.y, 11); return { ...robotPose, px: [p.u, p.v] }; };
+const robotWithPixel = () => { const p = floorToPixel(camera, robotPose.x, robotPose.y, 10.5); return { ...robotPose, px: [p.u, p.v] }; };
 const trackerLine = () => JSON.stringify({
   t: Date.now() - startedAt, calibrated: true, frame: [2304, 1296], floor: [76, 60], zUp: true, floorMarkers: 4, fps: 15, markers: [0, 1, 2, 3, 4, 5],
   robot: robotWithPixel(), arm: { x: 70, y: 10, z: 5, heading: 180, px: [0, 0] }, camera,

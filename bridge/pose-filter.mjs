@@ -29,7 +29,7 @@ function inverse3(m) {
 }
 
 export const FILTER_DEFAULTS = {
-  markerHeight: 11,         // cm above the floor. null = learn it (unreliable, see above)
+  markerHeight: 10.5,       // cm above the floor, measured with a ruler on the standing robot. null = learn it (unreliable, see above)
   pixelSigmaByFloorMarkers: [0, 10, 5, 5, 1],  // px, indexed by how many floor markers fixed the camera pose
   headingSigma: 0.03,       // rad. The recordings show 0.75 to 1.0 degrees of spread on a robot standing still
   initialHeight: 6, initialHeightSigma: 4,

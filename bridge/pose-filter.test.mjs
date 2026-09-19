@@ -54,7 +54,7 @@ const spread = (values) => { const m = values.reduce((a, b) => a + b, 0) / value
 for (const name of ["rec-001", "rec-002"]) {
   const file = new URL(`../recordings/${name}/states.jsonl`, import.meta.url);
   if (!fs.existsSync(file)) { console.log(`SKIP  ${name}: not on this machine`); continue; }
-  const filter = new PoseFilter();  // default marker height, 11 cm
+  const filter = new PoseFilter();  // default marker height, 10.5 cm as measured
   let last = null; const raw = [], out = [];
   for (const line of fs.readFileSync(file, "utf8").trim().split("\n")) {
     const state = JSON.parse(line).state, robot = state.robot;
