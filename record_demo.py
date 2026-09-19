@@ -27,7 +27,7 @@ import termios
 import time
 import tty
 
-from so101_safe import default_port
+from so101_safe import default_port, arm_config
 from so101_ik import JOINTS, fk
 from sesame_tracker import Tracker, Poller
 
@@ -38,8 +38,8 @@ class Arm:
     def __init__(self, port):
         if not port:
             raise SystemExit("no arm found: plug in the SO-101 (a USB serial device), or set SO101_PORT / --port")
-        from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
-        self.robot = SO101Follower(SO101FollowerConfig(port=port, id="follower"))
+        from lerobot.robots.so_follower import SO101Follower
+        self.robot = SO101Follower(arm_config(port))
         self.robot.connect(calibrate=False)
         # The Feetech bus occasionally drops a status packet right after connect; retry the torque-off.
         for attempt in range(5):
