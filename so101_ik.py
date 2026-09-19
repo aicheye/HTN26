@@ -1,5 +1,11 @@
 """Closed-form inverse kinematics for the SO-101 arm (LeRobot SOFollower joint order).
 
+Safety
+- SAFE_LIMITS is the range the arm may be commanded to; ik() never returns a pose
+  outside it or with a link closer to the table than MIN_LINK_Z. check_pose()
+  explains why a pose is rejected and assert_safe() raises UnsafePoseError.
+  Use so101_safe.send() to command the robot so nothing past the limit is sent.
+
 Frames and conventions
 - Positions are metres in base_link. Angles in and out are degrees.
 - shoulder_pan rotates about -z, so azimuth = -pan.
@@ -24,6 +30,7 @@ L1, A1 = 0.1160000, np.radians(76.03225)  # shoulder_lift -> elbow_flex, and its
 L2, A2 = 0.1350002, np.radians(2.207492)  # elbow_flex -> wrist_flex, and its angle at q=0
 L3 = 0.0610999                            # wrist_flex -> wrist_roll origin, along the roll axis
 LA = 0.0981274                            # wrist_roll origin -> gripper_frame, along the roll axis
+LAT_CHAIN = -0.0182779                    # lateral offset of the lift/elbow/wrist_flex chain from the pan plane
 LAT_R = -0.0001768                        # lateral offset of the roll axis from the pan plane
 # gripper_frame offset perpendicular to the roll axis at roll=0: (lateral, in-plane) components.
 # With roll: lateral = N0*cos(roll) + V0*sin(roll); in-plane = -N0*sin(roll) + V0*cos(roll).
@@ -32,8 +39,26 @@ JAW_PHASE = np.radians(2.7896)            # jaw axis is rotated this much about 
 TABLE_Z = 0.0                             # targets below this height are rejected
 
 JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
-LIMITS = {"shoulder_pan": (-110.0, 110.0), "shoulder_lift": (-100.0, 100.0),
-          "elbow_flex": (-96.8, 96.8), "wrist_flex": (-95.0, 95.0), "wrist_roll": (-157.0, 163.0)}
+URDF_LIMITS = {"shoulder_pan": (-110.0, 110.0), "shoulder_lift": (-100.0, 100.0),
+               "elbow_flex": (-96.8, 96.8), "wrist_flex": (-95.0, 95.0), "wrist_roll": (-157.0, 163.0)}
+
+# Safe range the arm may be COMMANDED to, in degrees. Narrower than the URDF: 5 deg inside every
+# URDF limit, and the pan is capped where it hit a mechanical stop on the real arm on 2026-09-19
+# (about +79 deg with the arm extended; the servo registers allow more but the arm does not).
+# ik() never returns a pose outside this box, and check_pose() rejects one. Widen a value only
+# after moving the arm there by hand and seeing that nothing binds.
+SAFE_LIMITS = {"shoulder_pan": (-75.0, 75.0), "shoulder_lift": (-95.0, 95.0),
+               "elbow_flex": (-91.8, 91.8), "wrist_flex": (-90.0, 90.0), "wrist_roll": (-152.0, 158.0)}
+LIMITS = SAFE_LIMITS
+# Minimum height above the table (m) for the elbow, wrist_flex pivot and wrist_roll origin: the
+# motor bodies sit around those points, so this is the crash margin. The gripper frame is the
+# fingertips and may come down to the table itself.
+MIN_LINK_Z = {"elbow_flex": 0.04, "wrist_flex": 0.04, "wrist_roll": 0.04, "gripper_frame": 0.0}
+UNSAFE_MSG = "Refusing to command it: driving the arm past this position risks breaking the robot."
+
+
+class UnsafePoseError(ValueError):
+    """Raised by assert_safe() for a pose outside SAFE_LIMITS or too close to the table."""
 
 
 def _wrap(deg):
@@ -55,8 +80,47 @@ def _roll_for(jaw_yaw, azimuth, pitch):
     return None
 
 
+def link_points(joints):
+    """Base-frame positions (m) of the elbow, wrist_flex pivot, wrist_roll origin and gripper frame
+    for joint angles in degrees. Same planar model as ik(), matches the URDF FK to 0.005 mm."""
+    pan, lift, elbow, wf, roll = (np.radians(joints[j]) for j in JOINTS)
+    az = -pan
+    er = np.array([np.cos(az), np.sin(az), 0.0]); el = np.array([-np.sin(az), np.cos(az), 0.0]); ez = np.array([0, 0, 1.0])
+    pitch = -(lift + elbow + wf)
+    u = np.array([np.cos(pitch), np.sin(pitch)]); v = np.array([-np.sin(pitch), np.cos(pitch)])
+    e = np.array([R0, Z0]) + L1 * np.array([np.cos(A1 - lift), np.sin(A1 - lift)])
+    w = e + L2 * np.array([np.cos(A2 - lift - elbow), np.sin(A2 - lift - elbow)])
+    r = w + L3 * u
+    g = r + LA * u + (-N0 * np.sin(roll) + V0 * np.cos(roll)) * v
+    lat_g = LAT_R + N0 * np.cos(roll) + V0 * np.sin(roll)
+    pts = {"elbow_flex": (e, LAT_CHAIN), "wrist_flex": (w, LAT_CHAIN), "wrist_roll": (r, LAT_R), "gripper_frame": (g, lat_g)}
+    return {k: P0 + rz[0] * er + lat * el + rz[1] * ez for k, (rz, lat) in pts.items()}
+
+
+def check_pose(joints):
+    """None if the pose (dict of the 5 arm joints, deg) is safe to command, else a message saying why not."""
+    for j in JOINTS:
+        lo, hi = SAFE_LIMITS[j]
+        if not lo <= joints[j] <= hi:
+            return (f"UNSAFE POSE: {j}={joints[j]:+.1f} deg is outside the safe range {lo:+.1f}..{hi:+.1f} deg. "
+                    + UNSAFE_MSG)
+    for name, pt in link_points(joints).items():
+        if pt[2] < MIN_LINK_Z[name] - 1e-6:
+            return (f"UNSAFE POSE: {name} would be {pt[2]*100:.1f} cm above the table "
+                    f"(minimum {MIN_LINK_Z[name]*100:.0f} cm). " + UNSAFE_MSG)
+    return None
+
+
+def assert_safe(joints):
+    """Raise UnsafePoseError with the reason if the pose must not be commanded."""
+    msg = check_pose(joints)
+    if msg:
+        raise UnsafePoseError(msg)
+    return joints
+
+
 def ik(x, y, z, jaw_yaw_deg, approach_pitch_deg=-90.0):
-    """Joint angles (deg) placing gripper_frame_link at (x, y, z), or None if unreachable."""
+    """Joint angles (deg) placing gripper_frame_link at (x, y, z), or None if unreachable or unsafe."""
     if z < TABLE_Z:
         return None
     dx, dy, dz = x - P0[0], y - P0[1], z - P0[2]
@@ -98,11 +162,7 @@ def ik(x, y, z, jaw_yaw_deg, approach_pitch_deg=-90.0):
     wrist_flex = -pitch - lift - elbow
 
     sol = dict(zip(JOINTS, map(_wrap, np.degrees([-azimuth, lift, elbow, wrist_flex, roll]))))
-    for name, val in sol.items():
-        lo, hi = LIMITS[name]
-        if not lo <= val <= hi:
-            return None
-    return sol
+    return None if check_pose(sol) else sol
 
 
 def reachable(x, y, z, jaw_yaw_deg, approach_pitch_deg=-90.0):
