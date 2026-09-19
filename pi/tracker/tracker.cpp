@@ -6,7 +6,8 @@
 // Marker 0 is on the robot. Marker 5 is taped flat on the floor against the base of the SO-101 arm.
 // Markers 1 to 4 are taped flat on the floor at the corners of a
 // rectangle: 1 = (0, 0), 2 = (W, 0), 3 = (W, H), 4 = (0, H).
-// The camera may move. The first frame that shows all four floor markers records where each of
+// The camera may move. The layout of the floor markers is recorded once, from the first moment all four
+// are visible and the camera has been held still for a few frames. That records where each of
 // their corners lies on the floor. After that, every frame solves the camera's position from
 // whichever floor markers are visible (one is enough, more is steadier). Each tracked marker's
 // height then comes from its known printed size, and its x, y from where its pixel ray crosses
@@ -231,6 +232,10 @@ int main(int argc, char** argv) {
   FloorCamera cam;
   std::vector<cv::Point3f> floorMarkerCorners[5];  // floor position of each corner of markers 1 to 4, once learned
   bool layoutLearned = false;
+  std::vector<cv::Point2f> previousSeen;  // floor marker centres in the last frame that showed all four
+  int steadyFrames = 0;
+  const int STEADY_FRAMES_NEEDED = 5;     // the camera may be handheld: learn only while it is held still
+  const float STEADY_MAX_MOVE_PX = 3;
   const cv::Mat noDistortion;
   const float half = TRACKED_MARKER_CM / 2;
   // Corner order matches ArUco's: top-left, top-right, bottom-right, bottom-left.
@@ -281,8 +286,17 @@ int main(int argc, char** argv) {
           found++;
         }
       }
+      // Count consecutive frames in which all four markers are visible and have barely moved.
+      float moved = STEADY_MAX_MOVE_PX + 1;
+      if (found == 4 && previousSeen.size() == 4) {
+        moved = 0;
+        for (int i = 0; i < 4; i++) moved = std::max(moved, (float)cv::norm(seen[i] - previousSeen[i]));
+      }
+      steadyFrames = found == 4 && moved <= STEADY_MAX_MOVE_PX ? steadyFrames + 1 : 0;
+      previousSeen = found == 4 ? seen : std::vector<cv::Point2f>();
       cv::Vec3d rvec, tvec;
-      if (found == 4 && cv::solvePnP(floorCorners, seen, cam.K, noDistortion, rvec, tvec, false, cv::SOLVEPNP_IPPE)) {
+      if (steadyFrames >= STEADY_FRAMES_NEEDED &&
+          cv::solvePnP(floorCorners, seen, cam.K, noDistortion, rvec, tvec, false, cv::SOLVEPNP_IPPE)) {
         setPose(rvec, tvec);
         for (size_t i = 0; i < ids.size(); i++) {
           if (ids[i] < 1 || ids[i] > 4) continue;
