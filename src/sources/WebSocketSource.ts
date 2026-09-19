@@ -1,5 +1,9 @@
+import { ARM_REST_POSE } from "../components/mapShared";
 import type { Ack, Command, Envelope, WorldState } from "../types/world";
 import type { ConnectionStatus, StateSource } from "./StateSource";
+
+/** id the bridge gives the arm's own tracked-tag obstacle (bridge/bridge.mjs). */
+const ARM_TAG_OBSTACLE_ID = "so101-base";
 
 /** Real backend: expects Envelope JSON frames over a WebSocket. Unused until the camera exists. */
 export class WebSocketSource implements StateSource {
@@ -49,7 +53,7 @@ export class WebSocketSource implements StateSource {
       } catch {
         return;
       }
-      if (msg.type === "state") this.stateSubs.forEach((cb) => cb(msg.data));
+      if (msg.type === "state") this.stateSubs.forEach((cb) => cb(this.withArm(msg.data)));
       else if (msg.type === "ack") this.ackSubs.forEach((cb) => cb(msg.data));
     };
     ws.onerror = () => this.status("error");
@@ -83,5 +87,31 @@ export class WebSocketSource implements StateSource {
 
   private status(s: ConnectionStatus) {
     this.statusSubs.forEach((cb) => cb(s));
+  }
+
+  /**
+   * The bridge only reports the arm's tracked base as a plain circle obstacle -
+   * it has no joint telemetry. Turn that into a resting ArmState so the
+   * articulated 3D model still shows up (just not animated) when live.
+   */
+  private withArm(state: WorldState): WorldState {
+    if (state.arm) return state;
+    const tag = state.obstacles.find((o) => o.id === ARM_TAG_OBSTACLE_ID);
+    if (!tag) return state;
+
+    const { width, length } = state.arena;
+    const edges = [
+      { side: "south" as const, dist: tag.y },
+      { side: "north" as const, dist: length - tag.y },
+      { side: "west" as const, dist: tag.x },
+      { side: "east" as const, dist: width - tag.x },
+    ];
+    const side = edges.reduce((a, b) => (b.dist < a.dist ? b : a)).side;
+
+    return {
+      ...state,
+      obstacles: state.obstacles.filter((o) => o.id !== ARM_TAG_OBSTACLE_ID),
+      arm: { mount: { x: tag.x, y: tag.y, yaw: tag.yaw, side }, joints: ARM_REST_POSE, mode: "idle" },
+    };
   }
 }
