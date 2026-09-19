@@ -96,6 +96,22 @@ def link_points(joints):
     return {k: P0 + rz[0] * er + lat * el + rz[1] * ez for k, (rz, lat) in pts.items()}
 
 
+def fk(joints):
+    """Forward kinematics for joint angles in degrees: gripper_frame_link position (m, base_link), the
+    approach pitch (deg, -90 = pointing down) and the jaw heading in the table plane (deg). The inverse of
+    ik(): fk(ik(x, y, z, yaw, pitch)) gives back x, y, z, pitch and yaw up to the jaws' 180-degree symmetry."""
+    pts = link_points(joints)
+    x, y, z = pts["gripper_frame"]
+    pan, lift, elbow, wf, roll = (np.radians(joints[j]) for j in JOINTS)
+    pitch = -(lift + elbow + wf)
+    az = -pan
+    s = np.sin(pitch)
+    # horizontal projection of the jaw axis: cos(roll - phase) * sin(pitch) along the radial, -sin(roll - phase) lateral
+    a = roll - JAW_PHASE
+    heading = az + np.arctan2(-np.sin(a), np.cos(a) * s) if abs(s) > 1e-9 else float("nan")
+    return {"x": float(x), "y": float(y), "z": float(z), "pitch": float(_wrap(np.degrees(pitch))), "jaw_yaw": float(_wrap(np.degrees(heading)))}
+
+
 def check_pose(joints):
     """None if the pose (dict of the 5 arm joints, deg) is safe to command, else a message saying why not."""
     for j in JOINTS:
