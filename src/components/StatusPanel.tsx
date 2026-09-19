@@ -4,7 +4,7 @@ export function Telemetry() {
   const { state, selectedRobotId, setSelectedRobotId } = useWorld();
   const robot = state?.robots.find((r) => r.id === selectedRobotId) ?? state?.robots[0];
 
-  if (!robot) return <p className="text-xs text-zinc-400">Waiting for first frame</p>;
+  if (!robot) return <p className="text-xs text-zinc-500">Waiting for first frame</p>;
 
   return (
     <div className="space-y-2">
@@ -12,7 +12,7 @@ export function Telemetry() {
         <select
           value={selectedRobotId ?? ""}
           onChange={(e) => setSelectedRobotId(e.target.value)}
-          className="rounded border border-zinc-300 bg-white px-1 py-0.5 text-xs text-zinc-700"
+          className="rounded border border-zinc-700 bg-zinc-800 px-1 py-0.5 text-xs text-zinc-200"
         >
           {state.robots.map((r) => (
             <option key={r.id} value={r.id}>
@@ -22,7 +22,7 @@ export function Telemetry() {
         </select>
       )}
       {!robot.tracking && (
-        <p className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-700">
+        <p className="rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-300">
           Tag not detected — showing last known pose.
         </p>
       )}
@@ -64,21 +64,21 @@ export function CommandLog() {
   const { log } = useWorld();
 
   if (log.length === 0) {
-    return <p className="text-xs text-zinc-400">No commands yet</p>;
+    return <p className="text-xs text-zinc-500">No commands yet</p>;
   }
 
   return (
     <ul className="space-y-1 pr-1 text-xs">
       {log.map((e) => (
-        <li key={e.command.id} className="flex items-center gap-2 text-zinc-600">
+        <li key={e.command.id} className="flex items-center gap-2 text-zinc-400">
           <span
             className={
-              e.ack ? (e.ack.ok ? "text-emerald-600" : "text-red-600") : "text-zinc-300"
+              e.ack ? (e.ack.ok ? "text-emerald-400" : "text-red-400") : "text-zinc-600"
             }
           >
             {e.ack ? (e.ack.ok ? "✓" : "✕") : "•"}
           </span>
-          <span className="font-medium text-zinc-800">{e.command.type}</span>
+          <span className="font-medium text-zinc-100">{e.command.type}</span>
           {(e.command.pose || e.command.face) && (
             <span>{e.command.pose ?? e.command.face}</span>
           )}
@@ -87,7 +87,7 @@ export function CommandLog() {
               {e.command.target.x.toFixed(2)}, {e.command.target.y.toFixed(2)}
             </span>
           )}
-          <span className="ml-auto tabular-nums text-zinc-400">
+          <span className="ml-auto tabular-nums text-zinc-500">
             {new Date(e.command.ts).toLocaleTimeString([], {
               hour: "2-digit",
               minute: "2-digit",
@@ -114,7 +114,7 @@ function Row({
       <dt className="text-zinc-500">{label}</dt>
       <dd
         className={`text-right font-mono tabular-nums ${
-          muted ? "text-amber-600" : "text-zinc-800"
+          muted ? "text-amber-400" : "text-zinc-100"
         }`}
       >
         {value}

@@ -5,5 +5,7 @@ export type MapProps = {
   state: WorldState;
   selectedRobotId?: string | null;
   showCameraLayer?: boolean;
+  /** Thumbnail mode: no overlay controls, no chrome, not interactive. */
+  compact?: boolean;
   onPickGoal?: (p: Point) => void;
 };

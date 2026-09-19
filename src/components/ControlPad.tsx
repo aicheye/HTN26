@@ -86,8 +86,8 @@ export function ControlPad() {
       onPointerLeave={release}
       className={`relative flex h-10 w-10 items-center justify-center rounded-md border transition select-none ${
         active === type
-          ? "border-zinc-900 bg-zinc-900 text-white"
-          : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
+          ? "border-zinc-100 bg-zinc-100 text-zinc-900 shadow-inner"
+          : "border-zinc-700 bg-zinc-800 text-zinc-200 shadow-[0_1px_0_rgba(255,255,255,0.04),0_2px_4px_rgba(0,0,0,0.3)] hover:bg-zinc-700"
       }`}
     >
       <ArrowIcon rotation={rotation} />
@@ -116,9 +116,10 @@ export function ControlPad() {
             setActive(null);
             send("stop");
           }}
-          className="h-8 rounded-md bg-red-600 px-4 text-sm font-semibold text-white transition hover:bg-red-700"
+          className="h-8 rounded-md bg-red-600 px-4 text-sm font-semibold text-white shadow-[0_2px_6px_rgba(220,38,38,0.35)] transition hover:bg-red-700"
         >
           Stop
+          <span className="ml-1.5 text-[10px] font-normal opacity-70">Space</span>
         </button>
 
         <Menu label="Poses">
@@ -128,7 +129,7 @@ export function ControlPad() {
                 key={pose}
                 type="button"
                 onClick={() => send("pose", { pose })}
-                className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
+                className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
               >
                 {pose}
               </button>

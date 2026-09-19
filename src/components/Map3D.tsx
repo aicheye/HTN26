@@ -34,7 +34,12 @@ type ViewMode = "free" | "top" | "iso" | "follow";
  * rotated -90° about X. Inside it, position={[x, y, z]} and rotation-z={yaw} are
  * schema values verbatim. World -> local is (X, Y, Z) -> (X, -Z, Y).
  */
-export function Map3D({ state, showCameraLayer = false, onPickGoal }: MapProps) {
+export function Map3D({
+  state,
+  showCameraLayer = false,
+  compact = false,
+  onPickGoal,
+}: MapProps) {
   const { width, length } = state.arena;
   const [view, setView] = useState<ViewMode>("iso");
   const robot = state.robots.find((r) => r.tracking) ?? state.robots[0];
@@ -88,6 +93,7 @@ export function Map3D({ state, showCameraLayer = false, onPickGoal }: MapProps) 
 
         <OrbitControls
           makeDefault
+          enabled={!compact}
           enableDamping
           dampingFactor={0.1}
           rotateSpeed={0.55}
@@ -105,32 +111,35 @@ export function Map3D({ state, showCameraLayer = false, onPickGoal }: MapProps) 
           arena={state.arena}
           robot={robot}
           view={view}
+          compact={compact}
           onUserTakeOver={() => setView((v) => (v === "follow" ? v : "free"))}
         />
       </Canvas>
 
-      <div className="absolute left-3 top-3 flex gap-1 rounded-lg border border-zinc-200 bg-white/90 p-1 shadow-sm backdrop-blur">
-        {(
-          [
-            ["iso", "Reset"],
-            ["top", "Top"],
-            ["follow", "Follow"],
-          ] as [ViewMode, string][]
-        ).map(([mode, label]) => (
-          <button
-            key={mode}
-            type="button"
-            onClick={() => setView(mode)}
-            className={`rounded px-2 py-1 text-xs font-medium transition ${
-              view === mode
-                ? "bg-zinc-900 text-white"
-                : "text-zinc-600 hover:bg-zinc-100"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {!compact && (
+        <div className="absolute left-3 top-3 flex gap-1 rounded-lg border border-zinc-700 bg-zinc-900/85 p-1 shadow-lg backdrop-blur">
+          {(
+            [
+              ["iso", "Reset"],
+              ["top", "Top"],
+              ["follow", "Follow"],
+            ] as [ViewMode, string][]
+          ).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setView(mode)}
+              className={`rounded px-2 py-1 text-xs font-medium transition ${
+                view === mode
+                  ? "bg-zinc-100 text-zinc-900"
+                  : "text-zinc-300 hover:bg-zinc-800"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -143,11 +152,13 @@ function CameraRig({
   arena,
   robot,
   view,
+  compact,
   onUserTakeOver,
 }: {
   arena: Arena;
   robot: Robot | undefined;
   view: ViewMode;
+  compact: boolean;
   onUserTakeOver: () => void;
 }) {
   const camera = useThree((s) => s.camera);
@@ -185,6 +196,15 @@ function CameraRig({
   }, [view, arena.width, arena.length, span]);
 
   useFrame((_, dt) => {
+    const center = new THREE.Vector3(arena.width / 2, 0, -arena.length / 2);
+
+    // the thumbnail has no controls to aim the camera, so frame it directly
+    if (compact) {
+      camera.position.set(center.x, span * 0.95, center.z + span * 1.05);
+      camera.lookAt(center);
+      return;
+    }
+
     if (!controls) return;
     const k = 1 - Math.exp(-6 * dt);
 

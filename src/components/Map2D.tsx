@@ -21,7 +21,12 @@ const PADDING = 20; // px around the arena
 
 type View = { scale: number; offsetX: number; offsetY: number; height: number };
 
-export function Map2D({ state, showCameraLayer = false, onPickGoal }: MapProps) {
+export function Map2D({
+  state,
+  showCameraLayer = false,
+  compact = false,
+  onPickGoal,
+}: MapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<View>({ scale: 1, offsetX: 0, offsetY: 0, height: 0 });
@@ -42,15 +47,15 @@ export function Map2D({ state, showCameraLayer = false, onPickGoal }: MapProps) 
         canvas.height = h * dpr;
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      viewRef.current = computeView(state, w, h);
-      render(ctx, w, h, state, viewRef.current, showCameraLayer);
+      viewRef.current = computeView(state, w, h, compact ? 8 : PADDING);
+      render(ctx, w, h, state, viewRef.current, showCameraLayer, compact);
     };
 
     draw();
     const ro = new ResizeObserver(draw);
     ro.observe(wrap);
     return () => ro.disconnect();
-  }, [state, showCameraLayer]);
+  }, [state, showCameraLayer, compact]);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!onPickGoal) return;
@@ -75,9 +80,9 @@ export function Map2D({ state, showCameraLayer = false, onPickGoal }: MapProps) 
   );
 }
 
-function computeView(state: WorldState, w: number, h: number): View {
+function computeView(state: WorldState, w: number, h: number, pad = PADDING): View {
   const { width, length } = state.arena;
-  const scale = Math.min((w - PADDING * 2) / width, (h - PADDING * 2) / length);
+  const scale = Math.min((w - pad * 2) / width, (h - pad * 2) / length);
   return {
     scale,
     offsetX: (w - width * scale) / 2,
@@ -100,6 +105,7 @@ function render(
   state: WorldState,
   v: View,
   showCameraLayer: boolean,
+  compact: boolean,
 ) {
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = "#f8fafc";
@@ -115,7 +121,7 @@ function render(
   drawPath(ctx, state.path, v);
   if (state.goal) drawGoal(ctx, state.goal, v);
   state.robots.forEach((r) => drawRobot(ctx, r, v));
-  drawScaleBar(ctx, state, v);
+  if (!compact) drawScaleBar(ctx, state, v);
 }
 
 function drawFloor(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {

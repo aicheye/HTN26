@@ -10,8 +10,8 @@ export function Disclosure({
   children: ReactNode;
 }) {
   return (
-    <details open={defaultOpen} className="group border-b border-zinc-200 last:border-b-0">
-      <summary className="flex cursor-pointer list-none items-center justify-between py-3 text-sm font-medium text-zinc-700 marker:hidden hover:text-zinc-900">
+    <details open={defaultOpen} className="group border-b border-zinc-800 last:border-b-0">
+      <summary className="flex cursor-pointer list-none items-center justify-between py-3 text-sm font-medium text-zinc-300 marker:hidden hover:text-zinc-100">
         {title}
         <Chevron />
       </summary>
@@ -50,13 +50,13 @@ export function Menu({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50"
+        className="flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800"
       >
         {label}
         <Chevron />
       </button>
       {open && (
-        <div className="absolute right-0 z-50 mt-1 w-64 rounded-lg border border-zinc-200 bg-white p-3 shadow-lg">
+        <div className="absolute right-0 z-50 mt-1 w-64 rounded-lg border border-zinc-800 bg-zinc-900 p-3 shadow-xl">
           {children}
         </div>
       )}
@@ -68,7 +68,7 @@ export function Chevron() {
   return (
     <svg
       viewBox="0 0 12 12"
-      className="h-3 w-3 text-zinc-400 transition-transform group-open:rotate-180"
+      className="h-3 w-3 text-zinc-500 transition-transform group-open:rotate-180"
       aria-hidden
     >
       <path

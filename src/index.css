@@ -8,11 +8,15 @@ body,
 
 body {
   margin: 0;
-  background-color: #f6f6f7;
-  color: #18181b;
+  background-color: #09090b;
+  color: #e4e4e7;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
+}
+
+::selection {
+  background: #3f3f46;
 }
 
 summary::-webkit-details-marker {
