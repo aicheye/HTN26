@@ -16,9 +16,17 @@ inline const char* lensBusForUnit(int unit) { return unit == 4 ? "/dev/i2c4" : "
 
 inline int lensCodeForDistance(double metres) { return (int)(445 + 32 / metres + 0.5); }
 
+// Which call failed last: "open" or "devctl". The I2C devices belong to root on the QNX image, so opening
+// them fails with "Permission denied" until they are made writable (pi/run-focus.sh does that with sudo).
+inline const char*& lensFailedAt() {
+  static const char* stage = "";
+  return stage;
+}
+
 // Returns 0 on success, or the errno-style error from open() or devctl().
 inline int lensWrite(const char* bus, const uint8_t* bytes, uint32_t count) {
   int fd = open(bus, O_RDWR);
+  lensFailedAt() = "open";
   if (fd < 0) return errno;
   struct {
     i2c_send_t header;
@@ -31,6 +39,7 @@ inline int lensWrite(const char* bus, const uint8_t* bytes, uint32_t count) {
   message.header.stop = 1;
   std::memcpy(message.data, bytes, count);
   int error = devctl(fd, DCMD_I2C_SEND, &message, sizeof(message.header) + count, nullptr);
+  lensFailedAt() = "devctl";
   close(fd);
   return error;
 }

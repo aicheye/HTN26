@@ -66,14 +66,14 @@ int main(int argc, char** argv) {
     double bestSharpness = -1;
     for (int code = 300; code <= 800; code += 20) {
       int error = lensSetCode(unit, code);
-      if (error) { std::printf("lens write failed at code %d: error %d (%s)\n", code, error, std::strerror(error)); return 4; }
+      if (error) { std::printf("lens write failed at code %d in %s(): error %d (%s)\n", code, lensFailedAt(), error, std::strerror(error)); return 4; }
       double s = (sharpness(nextFrame(6)) + sharpness(nextFrame(0)) + sharpness(nextFrame(0))) / 3;
       std::printf("code %4d  sharpness %8.1f\n", code, s);
       if (s > bestSharpness) { bestSharpness = s; best = code; }
     }
   }
   int error = lensSetCode(unit, best);
-  if (error) { std::printf("lens write failed: error %d (%s)\n", error, std::strerror(error)); return 4; }
+  if (error) { std::printf("lens write failed in %s(): error %d (%s)\n", lensFailedAt(), error, std::strerror(error)); return 4; }
   cv::Mat frame = nextFrame(8);
   std::printf("lens set to code %d (focus distance about %.2f m). sharpness now: %.1f\n", best,
               best > 445 ? 32.0 / (best - 445) : 99.0, sharpness(frame));
