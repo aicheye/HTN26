@@ -5,12 +5,15 @@
 // (WebSocket), and serves ws://localhost:8080/ws with WorldState in metres and radians.
 // The object detector posts its boxes to POST http://localhost:8080/objects.
 // goto is handled by navigator.mjs: path planning around obstacles, walking control, stuck recovery.
+// POST /drive {"mode": "software", "gait": "trot", "trim": 0.1} walks the robot with gait.mjs (poses streamed from
+// here, no reflash needed) in place of the firmware's own gaits. The setting is saved to drive.json.
 // POST /calibrate measures the robot's real walking and turning with the camera and saves motion.json.
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import { WebSocketServer } from "ws";
 import { pixelToFloor } from "../pi/client/floor.js";
+import { GaitEngine } from "./gait.mjs";
 import { Navigator } from "./navigator.mjs";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -23,6 +26,7 @@ const ROBOT_FOOTPRINT = { width: 0.105, length: 0.125 };  // metres, from the fr
 const ARM_BASE_RADIUS = 0.09;                             // metres, estimate of the SO-101 base
 const TRACKING_TIMEOUT_MS = 500;
 const MOTION_FILE = new URL("./motion.json", import.meta.url);
+const DRIVE_FILE = new URL("./drive.json", import.meta.url);
 const MOVES = ["forward", "backward", "left", "right"];
 
 let tracker = null;        // latest tracker message
@@ -36,7 +40,17 @@ let manualObstacles = [];  // posted directly in metres, for example from the fr
 let seq = 0;
 
 const savedMotion = fs.existsSync(MOTION_FILE) ? JSON.parse(fs.readFileSync(MOTION_FILE, "utf8")) : {};
-const navigator = new Navigator((command) => sendToRobot({ command }), savedMotion);
+
+// Movement goes through the firmware's own gaits (mode "firmware") or through gait.mjs (mode "software").
+const drive = { mode: "firmware", gait: "trot", trim: 0, frameDelay: 100, ...(fs.existsSync(DRIVE_FILE) ? JSON.parse(fs.readFileSync(DRIVE_FILE, "utf8")) : {}) };
+const gaitEngine = new GaitEngine((servos) => sendToRobot({ servos }), drive);
+function move(command, face = {}) {
+  if (drive.mode !== "software") return sendToRobot({ command, ...face });
+  if (Object.keys(face).length) sendToRobot(face);
+  gaitEngine.set(command);
+  return robotSocket?.readyState === WebSocket.OPEN;
+}
+const navigator = new Navigator((command) => move(command), savedMotion);
 
 // Tracker frame: centimetres, origin at floor marker 1, x toward marker 2, y toward marker 4.
 // Frontend frame: metres, +y up the screen, yaw counter-clockwise seen from above. When the markers
@@ -69,7 +83,10 @@ function connectTracker() {
 function connectRobot() {
   const socket = new WebSocket(ROBOT_URL);
   socket.onopen = () => { robotSocket = socket; };
-  socket.onmessage = (event) => { try { robotState = JSON.parse(event.data); } catch {} };
+  socket.onmessage = (event) => {
+    try { robotState = JSON.parse(event.data); } catch { return; }
+    gaitEngine.onRobotState(robotState);
+  };
   socket.onerror = () => {};
   socket.onclose = () => {
     robotSocket = null;
@@ -90,7 +107,7 @@ function buildState() {
   if (fresh && tracker.arm) lastArm = toWorld(tracker.arm.x, tracker.arm.y, tracker.arm.heading);
   const tracking = Boolean(fresh && tracker.robot);
 
-  const command = robotState?.command ?? "";
+  const command = (drive.mode === "software" && gaitEngine.command) || (robotState?.command ?? "");
   const mode = !tracking ? "lost" : command === "left" || command === "right" ? "turning" : MOVES.includes(command) ? "moving" : "idle";
   const robot = lastRobot && {
     id: "sesame-1", tagId: ROBOT_TAG, x: lastRobot.x, y: lastRobot.y, yaw: lastRobot.yaw, footprint: ROBOT_FOOTPRINT,
@@ -123,9 +140,8 @@ function handleCommand(command) {
     return ack(true);
   }
   navigator.cancel();  // any manual command cancels a goto
-  if (MOVES.includes(command.type)) sent = sendToRobot({ command: command.type, ...face });
-  else if (command.type === "stop") sent = sendToRobot({ command: "stop" });
-  else if (command.type === "pose") sent = command.pose ? sendToRobot({ command: command.pose, ...face }) : null;
+  if (MOVES.includes(command.type) || command.type === "stop") sent = move(command.type, command.type === "stop" ? {} : face);
+  else if (command.type === "pose") sent = command.pose ? (gaitEngine.set("stop"), sendToRobot({ command: command.pose, ...face })) : null;
   else if (command.type === "face") sent = command.face ? sendToRobot(face) : null;
   else return ack(false, `unknown command type ${command.type}`);
   if (sent === null) return ack(false, `${command.type} needs a ${command.type} field`);
@@ -163,6 +179,21 @@ const server = http.createServer((request, response) => {
   if (request.method === "OPTIONS") return reply(204, {});
   if (request.url === "/state") return reply(200, buildState());
   if (request.url === "/objects" && request.method === "GET") return reply(200, cvObstacles);
+  if (request.url === "/drive" && request.method === "GET") return reply(200, drive);
+  if (request.url === "/drive" && request.method === "POST") {
+    let text = "";
+    request.on("data", (chunk) => { text += chunk; });
+    request.on("end", () => {
+      try {
+        gaitEngine.set("stop");
+        Object.assign(drive, JSON.parse(text));
+        gaitEngine.configure(drive);
+        fs.writeFileSync(DRIVE_FILE, JSON.stringify(drive, null, 2) + "\n");
+        reply(200, drive);
+      } catch (error) { reply(400, { error: error.message }); }
+    });
+    return;
+  }
   if (request.url === "/calibrate" && request.method === "POST") {
     navigator.calibrate().then((motion) => {
       fs.writeFileSync(MOTION_FILE, JSON.stringify(navigator.motion, null, 2) + "\n");

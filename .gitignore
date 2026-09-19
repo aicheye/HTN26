@@ -11,3 +11,4 @@ pi/*.txt
 pi/*.jpg
 pi/qnx-camera-headers/
 bridge/motion.json
+bridge/drive.json
