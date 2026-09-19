@@ -13,8 +13,8 @@ Frames and conventions
   direction): 0 = horizontal forward, -90 = straight down (top-down grasp).
   In the URDF, lift + elbow + wrist_flex = -approach_pitch.
 - jaw_yaw_deg is the table-plane heading of the gripper_frame_link x axis, the
-  direction the jaws open and close. Jaws are symmetric, so if the direct
-  wrist_roll is outside its limits the 180-degree-flipped roll is used.
+  direction the jaws open and close. Jaws are symmetric, so of the two rolls
+  that give that heading the one furthest from a wrist_roll limit is used.
 
 Geometry (from so101_new_calib.urdf, verified against placo FK to 0.005 mm)
 The lift/elbow/wrist_flex chain lives in a plane 18.28 mm beside the pan
@@ -73,11 +73,10 @@ def _roll_for(jaw_yaw, azimuth, pitch):
         return None                                       # horizontal approach: heading not set by roll
     direct = np.arctan2(-abs(s) * np.sin(h), np.sign(s) * np.cos(h)) + JAW_PHASE
     lo, hi = np.radians(LIMITS["wrist_roll"])
-    for cand in (direct, direct + np.pi, direct - np.pi):  # direct first, then the flipped jaws
-        cand = np.radians(_wrap(np.degrees(cand)))
-        if lo <= cand <= hi:
-            return cand
-    return None
+    # The jaws are symmetric, so direct and direct+180 both work; take the one furthest from a limit.
+    cands = [np.radians(_wrap(np.degrees(c))) for c in (direct, direct + np.pi)]
+    cands = [c for c in cands if lo <= c <= hi]
+    return max(cands, key=lambda c: min(c - lo, hi - c)) if cands else None
 
 
 def link_points(joints):
@@ -117,6 +116,58 @@ def assert_safe(joints):
     if msg:
         raise UnsafePoseError(msg)
     return joints
+
+
+def clamp_pose(joints):
+    """Clip each arm joint into SAFE_LIMITS. Used to recover from a pose the arm is already in
+    (e.g. gravity-drooped past a software limit) without commanding anything further outside it."""
+    return {j: min(max(float(joints[j]), SAFE_LIMITS[j][0]), SAFE_LIMITS[j][1]) for j in JOINTS}
+
+
+def _lerp(a, b, n):
+    n = max(1, int(n))
+    return [{j: a[j] + (b[j] - a[j]) * i / n for j in JOINTS} for i in range(1, n + 1)]
+
+
+def _safe_suffix(poses):
+    """Drop leading poses that fail check_pose. Remaining poses must all be safe."""
+    i = next((k for k, q in enumerate(poses) if check_pose(q) is None), None)
+    if i is None or any(check_pose(q) for q in poses[i:]):
+        return None
+    return poses[i:]
+
+
+def recovery_waypoints(start, target, n_from_span):
+    """Joint-space path from start to target whose every pose passes check_pose.
+
+    start is clamped into SAFE_LIMITS. An already-below-table droop (typical limp hang
+    with wrist_flex high) is recovered by tucking wrist_flex to the target first, and
+    by not commanding the unsafe prefix the arm is already in. n_from_span(span_deg)
+    returns the number of steps for a segment.
+    """
+    start = clamp_pose(start)
+    target = {j: float(target[j]) for j in JOINTS}
+
+    def segment(a, b):
+        span = max(abs(b[j] - a[j]) for j in JOINTS)
+        return _lerp(a, b, n_from_span(span))
+
+    direct = _safe_suffix(segment(start, target))
+    if direct is not None:
+        return direct
+
+    vias = [{**start, "wrist_flex": target["wrist_flex"]}]
+    vias.append({**vias[0], "shoulder_lift": target["shoulder_lift"]})
+    for via in vias:
+        if check_pose(via) is not None:
+            continue
+        head = _safe_suffix(segment(start, via))
+        tail = segment(via, target)
+        if head is not None and not any(check_pose(q) for q in tail):
+            return head + tail
+    raise UnsafePoseError(
+        "UNSAFE POSE: no joint-space recovery path stays above the table. " + UNSAFE_MSG
+    )
 
 
 def ik(x, y, z, jaw_yaw_deg, approach_pitch_deg=-90.0):
