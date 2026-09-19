@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 export function Disclosure({
   title,
@@ -28,12 +29,28 @@ export function Menu({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    const left = Math.max(8, rect.right - 256);
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUpward = spaceBelow < 240 && rect.top > spaceBelow;
+    setPos(
+      openUpward
+        ? { left, bottom: window.innerHeight - rect.top + 4 }
+        : { left, top: rect.bottom + 4 },
+    );
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (!btnRef.current?.contains(t) && !panelRef.current?.contains(t)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     document.addEventListener("mousedown", onDown);
@@ -45,8 +62,9 @@ export function Menu({
   }, [open]);
 
   return (
-    <div ref={ref} className="relative">
+    <div className="relative">
       <button
+        ref={btnRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -55,11 +73,18 @@ export function Menu({
         {label}
         <Chevron />
       </button>
-      {open && (
-        <div className="absolute right-0 z-50 mt-1 w-64 rounded-lg border border-zinc-800 bg-zinc-900 p-3 shadow-xl">
-          {children}
-        </div>
-      )}
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={panelRef}
+            style={{ position: "fixed", left: pos.left, top: pos.top, bottom: pos.bottom }}
+            className="z-50 max-h-[70vh] w-64 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-3 shadow-xl"
+          >
+            {children}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
