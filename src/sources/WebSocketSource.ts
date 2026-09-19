@@ -99,19 +99,23 @@ export class WebSocketSource implements StateSource {
     const tag = state.obstacles.find((o) => o.id === ARM_TAG_OBSTACLE_ID);
     if (!tag) return state;
 
+    // real mount is bolted to the center of one of the arena's longer edges;
+    // the tracked tag position is noisy, so only use it to pick which long
+    // edge it's on, then snap to that edge's exact center
     const { width, length } = state.arena;
-    const edges = [
-      { side: "south" as const, dist: tag.y },
-      { side: "north" as const, dist: length - tag.y },
-      { side: "west" as const, dist: tag.x },
-      { side: "east" as const, dist: width - tag.x },
-    ];
-    const side = edges.reduce((a, b) => (b.dist < a.dist ? b : a)).side;
+    const longIsNorthSouth = width >= length;
+    const mount = longIsNorthSouth
+      ? tag.y <= length / 2
+        ? { x: width / 2, y: 0, yaw: Math.PI / 2, side: "south" as const }
+        : { x: width / 2, y: length, yaw: -Math.PI / 2, side: "north" as const }
+      : tag.x <= width / 2
+        ? { x: 0, y: length / 2, yaw: 0, side: "west" as const }
+        : { x: width, y: length / 2, yaw: Math.PI, side: "east" as const };
 
     return {
       ...state,
       obstacles: state.obstacles.filter((o) => o.id !== ARM_TAG_OBSTACLE_ID),
-      arm: { mount: { x: tag.x, y: tag.y, yaw: tag.yaw, side }, joints: ARM_REST_POSE, mode: "idle" },
+      arm: { mount, joints: ARM_REST_POSE, mode: "idle" },
     };
   }
 }
