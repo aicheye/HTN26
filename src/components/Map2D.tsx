@@ -1,20 +1,19 @@
 import { useEffect, useRef } from "react";
 import type { MapProps } from "./MapProps";
+import { armGeometry, displayRobot, origin, projectedOutline, sesameTopView, type Solid } from "../robot/geometry";
+import { cornerTags, markerImage, tableBorder, woodCanvas } from "./sceneSurface";
 import {
-  ARM_COLOR,
-  CHASSIS,
-  CHASSIS_EDGE,
   DANGER_M,
   FLOOR_EDGE,
-  GAIT_RATE,
-  GAIT_STRIDE,
   GRID,
-  OBSTACLE,
+  ROBOT_FITTING,
+  ROBOT_FITTING_INSET,
+  isCarried,
+  obstacleColor,
+  obstacleOutline,
   OBSTACLE_DANGER,
-  SHADOW,
   TILE_M,
   distanceTo,
-  isWalking,
 } from "./mapShared";
 import type { Obstacle, Point, Robot, WorldState } from "../types/world";
 
@@ -52,10 +51,15 @@ export function Map2D({
       render(ctx, w, h, state, viewRef.current, showCameraLayer, compact);
     };
 
+    (state.arena.cornerTagIds ?? []).forEach((id) => markerImage(id, draw));
+    state.robots.forEach((r) => markerImage(r.tagId, draw));
     draw();
     const ro = new ResizeObserver(draw);
     ro.observe(wrap);
-    return () => ro.disconnect();
+    let frame = 0;
+    const animate = () => { draw(); frame = requestAnimationFrame(animate); };
+    if (state.robots.some((r) => r.mode === "moving" || r.mode === "turning")) frame = requestAnimationFrame(animate);
+    return () => { ro.disconnect(); cancelAnimationFrame(frame); };
   }, [state, showCameraLayer, compact]);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -83,7 +87,8 @@ export function Map2D({
 
 function computeView(state: WorldState, w: number, h: number, pad = PADDING): View {
   const { width, length } = state.arena;
-  const scale = Math.min((w - pad * 2) / width, (h - pad * 2) / length);
+  const border = tableBorder(state.arena);
+  const scale = Math.max(1, Math.min((w - pad * 2) / (width + border * 2), (h - pad * 2) / (length + border * 2)));
   return {
     scale,
     offsetX: (w - width * scale) / 2,
@@ -121,7 +126,7 @@ function render(
   );
   drawPath(ctx, state.path, v);
   if (state.goal) drawGoal(ctx, state.goal, v);
-  state.robots.forEach((r) => drawRobot(ctx, r, v));
+  state.robots.forEach((r) => drawRobot(ctx, r, v, isCarried(state.arm, r.id)));
   if (state.arm) drawArm(ctx, state, v);
   if (!compact) drawScaleBar(ctx, state, v);
 }
@@ -133,13 +138,19 @@ function drawFloor(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {
   const hpx = length * v.scale;
 
   ctx.save();
-  ctx.fillStyle = FLOOR;
-  ctx.fillRect(x, y, wpx, hpx);
+  const border = tableBorder(state.arena) * v.scale;
+  roundRect(ctx, x - border, y - border, wpx + border * 2, hpx + border * 2, 8);
+  ctx.clip();
+  if (state.arena.surface !== "grid") ctx.drawImage(woodCanvas(), x - border, y - border, wpx + border * 2, hpx + border * 2);
+  else {
+    ctx.fillStyle = FLOOR;
+    ctx.fillRect(x - border, y - border, wpx + border * 2, hpx + border * 2);
+  }
 
   ctx.beginPath();
   ctx.rect(x, y, wpx, hpx);
   ctx.clip();
-  ctx.strokeStyle = GRID;
+  ctx.strokeStyle = state.arena.surface === "grid" ? GRID : "transparent";
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   for (let gx = TILE_M; gx < width; gx += TILE_M) {
@@ -162,26 +173,13 @@ function drawFloor(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {
   ctx.restore();
 }
 
-/** Fixed calibration markers, drawn as little AprilTag glyphs. */
+/** Fixed calibration markers use the same ArUco artwork as the printed sheets. */
 function drawCornerTags(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {
-  if (!state.arena.cornerTagIds?.length) return;
-  const { width, length } = state.arena;
-  const inset = 0.08;
-  const size = 0.06 * v.scale;
-  const corners: Point[] = [
-    { x: inset, y: inset },
-    { x: width - inset, y: inset },
-    { x: width - inset, y: length - inset },
-    { x: inset, y: length - inset },
-  ];
-
+  const size = (state.arena.tagSize ?? 0.08) * v.scale;
   ctx.save();
-  corners.forEach((c) => {
+  cornerTags(state.arena).forEach((c) => {
     const [px, py] = toPx(c, v);
-    ctx.fillStyle = "#334155";
-    ctx.fillRect(px - size / 2, py - size / 2, size, size);
-    ctx.fillStyle = FLOOR;
-    ctx.fillRect(px - size / 6, py - size / 6, size / 3, size / 3);
+    drawMarker(ctx, c.id, px, py, size);
   });
   ctx.restore();
 }
@@ -242,36 +240,7 @@ function drawCameraPlaceholder(ctx: CanvasRenderingContext2D, state: WorldState,
  * vision side traced; rects and circles are the analytic shapes they reported.
  */
 function outline(o: Obstacle, v: View): [number, number][] {
-  if (o.shape === "polygon" && o.points?.length) {
-    return o.points.map((p) => toPx(p, v));
-  }
-
-  const [cx, cy] = toPx({ x: o.x, y: o.y }, v);
-  if (o.shape === "circle") {
-    const r = (o.radius ?? 0) * v.scale;
-    return Array.from({ length: 32 }, (_, i) => {
-      const a = (i / 32) * Math.PI * 2;
-      return [cx + Math.cos(a) * r, cy + Math.sin(a) * r] as [number, number];
-    });
-  }
-  return rectCorners(o, v);
-}
-
-function rectCorners(o: Obstacle, v: View): [number, number][] {
-  const hw = (o.width ?? 0) / 2;
-  const hl = (o.length ?? 0) / 2;
-  const c = Math.cos(o.yaw);
-  const s = Math.sin(o.yaw);
-  return (
-    [
-      [-hw, -hl],
-      [hw, -hl],
-      [hw, hl],
-      [-hw, hl],
-    ] as [number, number][]
-  ).map(([lx, ly]) =>
-    toPx({ x: o.x + lx * c - ly * s, y: o.y + lx * s + ly * c }, v),
-  );
+  return obstacleOutline(o).map((p) => toPx(p, v));
 }
 
 function polyPath(ctx: CanvasRenderingContext2D, pts: [number, number][]) {
@@ -293,8 +262,16 @@ function drawObstacle(
 
   ctx.save();
   polyPath(ctx, pts);
-  ctx.fillStyle = danger ? OBSTACLE_DANGER : OBSTACLE;
+  ctx.fillStyle = obstacleColor(o);
+  ctx.shadowColor = "rgba(45, 32, 18, 0.2)";
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 2;
   ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.strokeStyle = danger ? OBSTACLE_DANGER : "#334155";
+  ctx.lineWidth = danger ? 2.5 : 1;
+  if (o.height === undefined) ctx.setLineDash([4, 3]);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -316,32 +293,23 @@ function drawPath(ctx: CanvasRenderingContext2D, path: Point[] | undefined, v: V
 
 function drawGoal(ctx: CanvasRenderingContext2D, goal: Point, v: View) {
   const [x, y] = toPx(goal, v);
-  const head = 9;
-  const top = y - 26;
-
   ctx.save();
-  ctx.fillStyle = "rgba(30, 41, 59, 0.18)";
   ctx.beginPath();
-  ctx.ellipse(x, y, 6, 2.5, 0, 0, Math.PI * 2);
+  ctx.arc(x, y, 12, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
   ctx.fill();
-
-  ctx.beginPath();
-  ctx.arc(x, top, head, Math.PI * 0.82, Math.PI * 0.18, false);
-  ctx.lineTo(x, y);
-  ctx.closePath();
-  ctx.fillStyle = "#ef4444";
-  ctx.fill();
-  ctx.strokeStyle = "#991b1b";
-  ctx.lineWidth = 2;
-  ctx.lineJoin = "round";
+  ctx.strokeStyle = "rgba(220,38,38,0.25)";
+  ctx.lineWidth = 1;
   ctx.stroke();
-
   ctx.beginPath();
-  ctx.arc(x, top, 3.4, 0, Math.PI * 2);
-  ctx.fillStyle = "#ffffff";
-  ctx.fill();
+  ctx.arc(x, y, 7, 0, Math.PI * 2);
+  ctx.strokeStyle = "#dc2626";
   ctx.lineWidth = 1.5;
   ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+  ctx.fillStyle = "#dc2626";
+  ctx.fill();
   ctx.restore();
 }
 
@@ -351,24 +319,7 @@ function drawArm(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {
   if (!arm) return;
   const [x, y] = toPx(arm.mount, v);
   const active = arm.mode !== "idle";
-  const r = 10;
-
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(-arm.mount.yaw);
-  ctx.fillStyle = ARM_COLOR;
-  ctx.strokeStyle = "#7c2d12";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(-r, -r * 0.8);
-  ctx.lineTo(r * 0.6, -r * 0.8);
-  ctx.lineTo(r * 1.3, 0);
-  ctx.lineTo(r * 0.6, r * 0.8);
-  ctx.lineTo(-r, r * 0.8);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
+  drawSolids(ctx, armGeometry(arm.joints), arm.mount, v);
 
   if (active) {
     const target = state.robots.find((rob) => rob.id === arm.targetRobotId);
@@ -394,72 +345,95 @@ function drawArm(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {
 }
 
 /**
- * Top-down quadruped drawn from the reported footprint: body plus four legs at the
- * hips. Sesame is two MG90 servos per leg, so the legs sit outboard of the shell.
+ * Top-down projection of the same URDF collision-envelope geometry used in 3D.
+ * Sesame is two MG90 servos per leg, so the legs sit outboard of the shell.
  */
-function drawRobot(ctx: CanvasRenderingContext2D, r: Robot, v: View) {
+function drawRobot(ctx: CanvasRenderingContext2D, r: Robot, v: View, carried: boolean) {
   const [cx, cy] = toPx({ x: r.x, y: r.y }, v);
-  const L = r.footprint.length * v.scale; // along heading
-  const W = r.footprint.width * v.scale; // across
-  const bodyL = L * 0.84;
-  const bodyW = W * 0.58;
-  const legL = L * 0.24;
-  const hipX = bodyL * 0.3;
-  const legInner = bodyW * 0.3;
-  const legSpan = W / 2 - legInner;
+  const L = 0.084 * v.scale; // along heading
+  const W = 0.068 * v.scale; // across
 
-  const body = r.tracking ? CHASSIS : "#94a3b8";
-  const edge = r.tracking ? CHASSIS_EDGE : "#64748b";
-
-  // diagonal-pair trot while a drive command is active
-  const gait = isWalking(r.mode);
-  const phase = gait ? (performance.now() / 1000) * GAIT_RATE : 0;
-  const stride = gait ? legL * GAIT_STRIDE : 0;
-
+  // Reported angles take precedence over the illustrative diagonal-pair walking gait.
+  const model = sesameTopView(displayRobot(r, performance.now() / 1000, carried), 0.6);
+  const s = v.scale;
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(-r.yaw);
-
-  ctx.shadowColor = SHADOW;
-  ctx.shadowBlur = 5;
-  ctx.shadowOffsetY = 2;
-
-  ctx.fillStyle = edge;
-  (
-    [
-      [hipX, -W / 2, 0],
-      [hipX, legInner, Math.PI],
-      [-hipX, -W / 2, Math.PI],
-      [-hipX, legInner, 0],
-    ] as [number, number, number][]
-  ).forEach(([x, y, offset]) => {
-    const swing = Math.sin(phase + offset) * stride;
-    roundRect(ctx, x + swing - legL / 2, y, legL, legSpan, legL * 0.35);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (const { hip, knee, foot } of model.legs) {
+    ctx.beginPath();
+    ctx.moveTo(hip.x * s, -hip.y * s);
+    ctx.lineTo(knee.x * s, -knee.y * s);
+    ctx.lineTo(foot.x * s, -foot.y * s);
+    ctx.lineWidth = 0.014 * s;
+    ctx.strokeStyle = r.tracking ? "#14171b" : "#9ba6af";
+    ctx.stroke();
+    ctx.lineWidth = 0.006 * s;
+    ctx.strokeStyle = r.tracking ? "#2b2f35" : "#bac3cb";
+    ctx.stroke();
+    ctx.save();
+    ctx.translate(foot.x * s, -foot.y * s);
+    ctx.rotate(Math.atan2(knee.y - foot.y, foot.x - knee.x));
+    roundRect(ctx, -0.008 * s, -0.005 * s, 0.016 * s, 0.01 * s, 0.004 * s);
+    ctx.fillStyle = r.tracking ? "#14171b" : "#9ba6af";
     ctx.fill();
-  });
-
-  roundRect(ctx, -bodyL / 2, -bodyW / 2, bodyL, bodyW, bodyW * 0.28);
-  ctx.fillStyle = body;
+    ctx.restore();
+  }
+  const bx = Math.min(...model.shell.map((p) => p.x)) * s;
+  const by = -Math.max(...model.shell.map((p) => p.y)) * s;
+  const paint = ctx.createLinearGradient(bx, by, bx, by + W);
+  paint.addColorStop(0, r.tracking ? r.shellColor ?? "#24272c" : "#bac3cb");
+  paint.addColorStop(1, r.tracking ? r.shellColor ?? "#121418" : "#8d99a4");
+  roundRect(ctx, bx, by, L, W, 0.01 * s);
+  ctx.fillStyle = paint;
+  ctx.shadowColor = "rgba(15, 23, 42, 0.16)";
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 2;
   ctx.fill();
   ctx.shadowColor = "transparent";
-  ctx.strokeStyle = edge;
-  ctx.lineWidth = 1.25;
-  if (!r.tracking) ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = r.tracking ? "#1e2731" : "#84929e";
+  ctx.lineWidth = 1;
   ctx.stroke();
-  ctx.setLineDash([]);
-
-  drawEyes(ctx, bodyL, bodyW, r.tracking);
+  for (const handle of model.handles) {
+    const x = Math.min(...handle.map((p) => p.x)) * s;
+    const y = -Math.max(...handle.map((p) => p.y)) * s;
+    const width = Math.max(...handle.map((p) => p.x)) * s - x;
+    const height = -Math.min(...handle.map((p) => p.y)) * s - y;
+    roundRect(ctx, x, y, width, height, height / 2);
+    ctx.fillStyle = r.tracking ? "#363b42" : "#c3ccd4";
+    ctx.fill();
+    ctx.strokeStyle = r.tracking ? "#59616b" : "#e2e8ed";
+    ctx.lineWidth = 0.65;
+    ctx.stroke();
+  }
+  drawEyes(ctx, L, W, r.tracking);
+  ctx.beginPath();
+  ctx.moveTo(0.055 * s, -0.004 * s);
+  ctx.lineTo(0.047 * s, -0.008 * s);
+  ctx.lineTo(0.047 * s, 0);
+  ctx.closePath();
+  ctx.fillStyle = "#64748b";
+  ctx.fill();
+  ctx.translate(0.001 * s, -0.004 * s);
+  ctx.rotate(Math.PI / 2);
+  drawMarker(ctx, r.tagId, 0, 0, 0.036 * s);
   ctx.restore();
+  if (L < 28) return;
 
   ctx.save();
-  ctx.font = "9px ui-monospace, monospace";
+  const top = Math.max(...model.legs.map(({ foot }) => foot.x * Math.sin(r.yaw) + foot.y * Math.cos(r.yaw)), 0.04);
+  const label = r.tracking ? r.id : `${r.id} · no tracking`;
+  const labelY = cy - top * s - 13;
+  ctx.font = "500 10px system-ui, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillStyle = r.tracking ? "rgba(15, 23, 42, 0.6)" : "#b45309";
-  ctx.fillText(
-    r.tracking ? r.id.toUpperCase() : `${r.id.toUpperCase()} · NO FIX`,
-    cx,
-    cy - Math.max(W, L) / 2 - 8,
-  );
+  ctx.textBaseline = "middle";
+  const width = ctx.measureText(label).width + 14;
+  roundRect(ctx, cx - width / 2, labelY - 8, width, 16, 5);
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.fill();
+  ctx.fillStyle = r.tracking ? "#475569" : "#b45309";
+  ctx.fillText(label, cx, labelY);
   ctx.restore();
 }
 
@@ -470,21 +444,55 @@ function drawEyes(
   bodyW: number,
   tracking: boolean,
 ) {
-  const r = Math.max(1.6, bodyW * 0.16);
-  const ex = bodyL * 0.24;
-  const ey = bodyW * 0.22;
+  const r = Math.max(1, bodyW * 0.075);
+  const ex = bodyL * 0.52;
+  const ey = bodyW * 0.2;
 
   [-ey, ey].forEach((y) => {
+    const cy = y - bodyW * 0.004 / 0.068;
     ctx.beginPath();
-    ctx.arc(ex, y, r, 0, Math.PI * 2);
-    ctx.fillStyle = "#ffffff";
+    ctx.ellipse(ex, cy, r * 0.55, r, 0, 0, Math.PI * 2);
+    ctx.fillStyle = tracking ? ROBOT_FITTING : "#d5dde5";
     ctx.fill();
-
+    ctx.strokeStyle = ROBOT_FITTING_INSET;
+    ctx.lineWidth = 0.65;
+    ctx.stroke();
     ctx.beginPath();
-    ctx.arc(ex + r * 0.3, y, r * 0.5, 0, Math.PI * 2);
-    ctx.fillStyle = tracking ? "#0f172a" : "#94a3b8";
-    ctx.fill();
+    ctx.moveTo(ex, cy - r * 0.35);
+    ctx.lineTo(ex, cy + r * 0.35);
+    ctx.stroke();
   });
+}
+
+function drawSolids(ctx: CanvasRenderingContext2D, solids: Solid[], pose: Point & { yaw: number }, v: View) {
+  const world = origin([pose.x, pose.y, 0], [0, 0, pose.yaw]);
+  ctx.save();
+  const outlines = solids.map((solid) => {
+    const points = projectedOutline(solid);
+    return { points, color: solid.color, height: Math.max(...points.map((p) => p.z)) };
+  });
+  outlines.sort((a, b) => a.height - b.height).forEach(({ points: outline, color }) => {
+    const points = outline.map((p) => toPx(p.clone().applyMatrix4(world), v));
+    polyPath(ctx, points);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = 0.65;
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function drawMarker(ctx: CanvasRenderingContext2D, id: number, x: number, y: number, size: number) {
+  ctx.save();
+  ctx.fillStyle = "white";
+  ctx.fillRect(x - size * 0.625, y - size * 0.625, size * 1.25, size * 1.25);
+  const image = markerImage(id);
+  if (image) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(image, x - size / 2, y - size / 2, size, size);
+  }
+  ctx.restore();
 }
 
 function roundRect(

@@ -14,6 +14,12 @@ export type Renderer = "2d" | "3d";
  * and nothing else in the app has to change.
  */
 export function MapView({ renderer = "2d", ...props }: MapProps & { renderer?: Renderer }) {
+  return <div className="relative h-full w-full">
+    <MapRenderer renderer={renderer} {...props} />
+  </div>;
+}
+
+function MapRenderer({ renderer = "2d", ...props }: MapProps & { renderer?: Renderer }) {
   if (renderer === "3d") {
     return (
       <ErrorBoundary

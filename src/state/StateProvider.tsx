@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   createSource,
+  MockSource,
   DEFAULT_SOURCE,
   getWsUrl,
   setWsUrl as persistWsUrl,
@@ -17,6 +18,7 @@ import {
   type SourceKind,
 } from "../sources";
 import { SesameHttpBridge } from "../robot/sesameApi";
+import type { MockScenarioId } from "../data/mockScenarios";
 import type { Ack, Command, CommandType, WorldState } from "../types/world";
 
 const ACK_TIMEOUT_MS = 4000;
@@ -39,6 +41,8 @@ type StateContextValue = {
   setSpeed: (s: number) => void;
   log: LogEntry[];
   send: (type: CommandType, extra?: Partial<Command>) => void;
+  resetMockScenario: (id: MockScenarioId) => void;
+  runMockTest: () => void;
 };
 
 const StateContext = createContext<StateContextValue | null>(null);
@@ -136,6 +140,13 @@ export function StateProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+  const resetMockScenario = useCallback((id: MockScenarioId) => {
+    if (sourceRef.current instanceof MockSource) sourceRef.current.resetScenario(id);
+  }, []);
+  const runMockTest = useCallback(() => {
+    if (sourceRef.current instanceof MockSource) sourceRef.current.runScenarioTest();
+  }, []);
+
   const value: StateContextValue = {
     state,
     status,
@@ -149,6 +160,8 @@ export function StateProvider({ children }: { children: ReactNode }) {
     setSpeed,
     log,
     send,
+    resetMockScenario,
+    runMockTest,
   };
 
   return <StateContext.Provider value={value}>{children}</StateContext.Provider>;

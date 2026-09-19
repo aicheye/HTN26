@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ControlPad } from "./components/ControlPad";
+import { MockSceneControls } from "./components/MockSceneControls";
 import { MapView, type Renderer } from "./components/MapView";
 import { CommandLog, Telemetry } from "./components/StatusPanel";
 import { useWorld } from "./state/StateProvider";
@@ -78,7 +79,7 @@ export default function App() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto p-4">
-            {section === "controls" && <ControlPad />}
+            {section === "controls" && <><ControlPad /><MockSceneControls /></>}
             {section === "telemetry" && <Telemetry />}
             {section === "log" && <CommandLog />}
             {section === "raw" && (

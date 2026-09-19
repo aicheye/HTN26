@@ -1,4 +1,27 @@
 import type { ArmJointAngles, ArmState, Obstacle, Point, Robot } from "../types/world";
+import { ARM_HOME, ARM_URDF_LIMITS } from "../robot/geometry";
+
+export function obstacleOutline(o: Obstacle): Point[] {
+  let points: Point[];
+  if (o.shape === "polygon" && o.points?.length) points = o.points;
+  else if (o.shape === "circle") points = Array.from({ length: 48 }, (_, i) => ({
+    x: o.x + Math.cos(i * Math.PI / 24) * (o.radius ?? 0.1),
+    y: o.y + Math.sin(i * Math.PI / 24) * (o.radius ?? 0.1),
+  }));
+  else points = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([x, y]) => ({
+    x: o.x + x * (o.width ?? 0.2) / 2 * Math.cos(o.yaw) - y * (o.length ?? 0.2) / 2 * Math.sin(o.yaw),
+    y: o.y + x * (o.width ?? 0.2) / 2 * Math.sin(o.yaw) + y * (o.length ?? 0.2) / 2 * Math.cos(o.yaw),
+  }));
+  return [...points, points[0]];
+}
+
+export function obstacleColor(o: Obstacle): string {
+  return /^#[0-9a-f]{6}$/i.test(o.color ?? "") ? o.color! : OBSTACLE;
+}
+
+export function obstacleHeight(o: Obstacle): number {
+  return Number.isFinite(o.height) && o.height! >= 0 ? Math.max(o.height!, 0.001) : 0.004;
+}
 
 export const FLOOR = "#e2e8f0";
 export const FLOOR_EDGE = "#cbd5e1";
@@ -7,6 +30,8 @@ export const OBSTACLE = "#475569";
 export const OBSTACLE_DANGER = "#b91c1c";
 export const CHASSIS = "#111111";
 export const CHASSIS_EDGE = "#000000";
+export const ROBOT_FITTING = "#f1f5f9";
+export const ROBOT_FITTING_INSET = "#bac6d1";
 export const GOAL = "#ef4444";
 export const SHADOW = "rgba(15, 23, 42, 0.3)";
 
@@ -55,10 +80,16 @@ export function distanceTo(o: Obstacle, p: Point): number {
     return Math.max(0, Math.hypot(p.x - o.x, p.y - o.y) - (o.radius ?? 0));
   }
   if (o.shape === "polygon" && o.points?.length) {
-    return Math.max(
-      0,
-      Math.min(...o.points.map((q) => Math.hypot(p.x - q.x, p.y - q.y))) - 0.05,
-    );
+    let inside = false;
+    let nearest = Infinity;
+    for (let i = 0, j = o.points.length - 1; i < o.points.length; j = i++) {
+      const a = o.points[j], b = o.points[i];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+      nearest = Math.min(nearest, Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy));
+      if ((a.y > p.y) !== (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside ? 0 : nearest;
   }
   const dx = p.x - o.x;
   const dy = p.y - o.y;
@@ -100,29 +131,14 @@ export const ARM_REACH_L2 =
 /** Furthest floor point the gripper can touch, measured from the mount. */
 export const ARM_MAX_REACH = ARM_REACH_L1 + ARM_REACH_L2 - 0.05;
 
-/** Joint limits. Shoulder/elbow are widened past the URDF spec so the rest pose can fold a full 180 degrees. */
-export const ARM_LIMITS: Record<keyof ArmJointAngles, [number, number]> = {
-  waist: [-1.91986, 1.91986],
-  shoulder: [-Math.PI, Math.PI],
-  elbow: [-Math.PI, Math.PI],
-  wristPitch: [-1.65806, 1.65806],
-  wristRoll: [-2.74385, 2.84121],
-  gripper: [-0.174533, 1.74533],
-};
+/** Joint limits from the supplied SO-101 URDF, without widening the mechanical range. */
+export const ARM_LIMITS: Record<keyof ArmJointAngles, [number, number]> = ARM_URDF_LIMITS;
 
 /**
- * Stowed pose: the upper arm lies horizontal pointing away from the arena,
- * then the elbow turns a full 180 degrees so the forearm lies horizontal
- * pointing back the other way, over the arena.
+ * Illustrative stowed pose within the URDF limits, used only when no arm pose is supplied.
+ * This is not a measurement of the photographed arm's joint angles.
  */
-export const ARM_REST_POSE: ArmJointAngles = {
-  waist: 0,
-  shoulder: Math.PI,
-  elbow: Math.PI,
-  wristPitch: 0,
-  wristRoll: 0,
-  gripper: 0.05,
-};
+export const ARM_REST_POSE: ArmJointAngles = ARM_HOME;
 
 export const ARM_COLOR = "#f97316";
 export const ARM_JOINT_COLOR = "#292524";

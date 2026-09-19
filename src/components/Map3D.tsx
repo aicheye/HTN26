@@ -1,28 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Line, OrbitControls } from "@react-three/drei";
+import { Line, OrbitControls, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import type { MapProps } from "./MapProps";
-import { ArmModel } from "./ArmModel";
+import { MetricArm as ArmModel, Solids } from "./MetricModels";
+import { displayRobot, sesameGeometry } from "../robot/geometry";
+import { cornerTags, markerUrls, tableBorder, woodCanvas } from "./sceneSurface";
 import {
-  CHASSIS,
-  CHASSIS_EDGE,
   FLOOR,
   FLOOR_EDGE,
-  GAIT_RATE,
-  GAIT_STRIDE,
+  ROBOT_FITTING,
+  ROBOT_FITTING_INSET,
   GOAL,
   GRID,
-  LEG_LAYOUT,
-  OBSTACLE,
+  obstacleColor,
+  obstacleHeight,
   OBSTACLE_DANGER,
   TILE_M,
+  obstacleOutline,
   ARM_CARRY_LIFT_M,
   ARM_MAX_REACH,
   isCarried,
   isDanger,
-  isWalking,
-  robotDims,
 } from "./mapShared";
 import type { Obstacle, Robot, WorldState } from "../types/world";
 
@@ -54,7 +53,7 @@ export function Map3D({
         shadows
         dpr={[1, 2]}
         camera={{
-          position: [width / 2, length * 0.85, length * 1.0],
+          position: [width / 2, Math.max(width, length) * 1.6, length * 1.3],
           fov: 45,
           near: 0.05,
           far: 60,
@@ -66,11 +65,13 @@ export function Map3D({
           position={[width, 2.5, length]}
           intensity={1.6}
           castShadow
-          shadow-mapSize={[1024, 1024]}
-          shadow-camera-left={-3}
-          shadow-camera-right={3}
-          shadow-camera-top={3}
-          shadow-camera-bottom={-3}
+          shadow-mapSize={[2048, 2048]}
+          shadow-bias={-0.0001}
+          shadow-normalBias={0.001}
+          shadow-camera-left={-width}
+          shadow-camera-right={width}
+          shadow-camera-top={length}
+          shadow-camera-bottom={-length}
         />
 
         <group rotation={[-Math.PI / 2, 0, 0]}>
@@ -108,7 +109,7 @@ export function Map3D({
           screenSpacePanning={false}
           target={[width / 2, 0, -length / 2]}
           minDistance={0.3}
-          maxDistance={Math.max(width, length) * 2.2}
+          maxDistance={Math.max(width, length) * 4}
           maxPolarAngle={Math.PI / 2 - 0.06}
         />
 
@@ -170,8 +171,10 @@ function CameraRig({
   const controls = useThree((s) => s.controls) as
     | { target: THREE.Vector3; addEventListener: Function; removeEventListener: Function }
     | null;
-  // the arm is taller than the arena is wide, so frame for it too
-  const span = Math.max(arena.width, arena.length, ARM_MAX_REACH * 1.3);
+  // Include the tabletop border and arm in the presets, including portrait viewports.
+  const size = useThree((s) => s.size);
+  const span = Math.max(arena.width + 2 * tableBorder(arena), arena.length + 2 * tableBorder(arena), ARM_MAX_REACH * 1.3)
+    * Math.max(1, size.height / Math.max(size.width, 1));
   const desired = useRef<{ pos: THREE.Vector3; target: THREE.Vector3 } | null>(null);
 
   useEffect(() => {
@@ -188,12 +191,12 @@ function CameraRig({
     const center = new THREE.Vector3(arena.width / 2, 0, -arena.length / 2);
     if (view === "top") {
       desired.current = {
-        pos: new THREE.Vector3(center.x, span * 1.15, center.z + 0.001),
+        pos: new THREE.Vector3(center.x, span * 1.55, center.z + 0.001),
         target: center,
       };
     } else if (view === "iso") {
       desired.current = {
-        pos: new THREE.Vector3(center.x, span * 0.75, center.z + span * 1.0),
+        pos: new THREE.Vector3(center.x, span * 1.25, center.z + span * 1.35),
         target: center,
       };
     } else {
@@ -269,7 +272,8 @@ function Ground({
     down.current = null;
     if (!start || !onPickGoal) return;
     if (start.moved > DRAG_PX || performance.now() - start.t > DRAG_MS) return;
-    onPickGoal({ x: e.point.x, y: -e.point.z });
+    const x = e.point.x, y = -e.point.z;
+    if (x >= 0 && y >= 0 && x <= arena.width && y <= arena.length) onPickGoal({ x, y });
   };
 
   return (
@@ -282,12 +286,16 @@ function Ground({
         }}
         onPointerUp={handleUp}
       >
-        <planeGeometry args={[arena.width, arena.length]} />
+        <planeGeometry args={[arena.width + tableBorder(arena) * 2, arena.length + tableBorder(arena) * 2]} />
         <meshStandardMaterial
           map={texture}
           color={dimmed ? "#94a3b8" : "#ffffff"}
           roughness={0.95}
         />
+      </mesh>
+      <mesh position={[arena.width / 2, arena.length / 2, -0.010]} receiveShadow castShadow>
+        <boxGeometry args={[arena.width + tableBorder(arena) * 2, arena.length + tableBorder(arena) * 2, 0.018]} />
+        <meshStandardMaterial color="#aa8757" roughness={0.8} />
       </mesh>
       <Line
         points={[
@@ -304,9 +312,15 @@ function Ground({
   );
 }
 
-/** One tile drawn once and repeated, so the 3D floor matches the 2D grid. */
+/** Shared wood surface, or a repeated tile when the arena explicitly requests a grid. */
 function useTileTexture(arena: Arena) {
-  return useMemo(() => {
+  const texture = useMemo(() => {
+    if (arena.surface !== "grid") {
+      const wood = new THREE.CanvasTexture(woodCanvas());
+      wood.colorSpace = THREE.SRGBColorSpace;
+      wood.anisotropy = 8;
+      return wood;
+    }
     const size = 64;
     const canvas = document.createElement("canvas");
     canvas.width = size;
@@ -324,34 +338,37 @@ function useTileTexture(arena: Arena) {
     texture.repeat.set(arena.width / TILE_M, arena.length / TILE_M);
     texture.anisotropy = 4;
     return texture;
-  }, [arena.width, arena.length]);
+  }, [arena.width, arena.length, arena.surface]);
+  useEffect(() => () => texture.dispose(), [texture]);
+  return texture;
 }
 
 function CornerTags({ arena }: { arena: Arena }) {
-  if (!arena.cornerTagIds?.length) return null;
-  const inset = 0.08;
-  const size = 0.06;
-  const corners: [number, number][] = [
-    [inset, inset],
-    [arena.width - inset, inset],
-    [arena.width - inset, arena.length - inset],
-    [inset, arena.length - inset],
-  ];
-  return (
-    <>
-      {corners.map(([x, y], i) => (
-        <mesh key={i} position={[x, y, 0.003]}>
-          <planeGeometry args={[size, size]} />
-          <meshBasicMaterial color="#334155" />
-        </mesh>
-      ))}
-    </>
-  );
+  return <>{cornerTags(arena).map(({ id, x, y }) => (
+    <group key={id} position={[x, y, 0.003]}>
+      <Marker id={id} size={arena.tagSize ?? 0.08} />
+    </group>
+  ))}</>;
+}
+
+function Marker({ id, size }: { id: number; size: number }) {
+  return <>
+    <mesh><planeGeometry args={[size * 1.25, size * 1.25]} /><meshBasicMaterial color="white" /></mesh>
+    {markerUrls[id] && <MarkerInk url={markerUrls[id]} size={size} />}
+  </>;
+}
+
+function MarkerInk({ url, size }: { url: string; size: number }) {
+  const texture = useTexture(url);
+  texture.magFilter = THREE.NearestFilter;
+  return <mesh position={[0, 0, 0.0002]}><planeGeometry args={[size, size]} /><meshBasicMaterial map={texture} toneMapped={false} /></mesh>;
 }
 
 function ObstacleMesh({ obstacle: o, danger }: { obstacle: Obstacle; danger: boolean }) {
-  const height = o.height ?? 0.2;
-  const color = danger ? OBSTACLE_DANGER : OBSTACLE;
+  const height = obstacleHeight(o);
+  const color = obstacleColor(o);
+  const outline = <Line points={obstacleOutline(o).map((p) => [p.x, p.y, height + 0.001] as [number, number, number])}
+    color={danger ? OBSTACLE_DANGER : "#334155"} lineWidth={danger ? 2 : 1} dashed={o.height === undefined} dashSize={0.01} gapSize={0.006} />;
 
   const extruded = useMemo(() => {
     if (o.shape !== "polygon" || !o.points?.length) return null;
@@ -368,15 +385,15 @@ function ObstacleMesh({ obstacle: o, danger }: { obstacle: Obstacle; danger: boo
 
   if (extruded) {
     return (
-      <mesh geometry={extruded} position={[o.x, o.y, 0]} castShadow receiveShadow>
+      <>{outline}<mesh geometry={extruded} position={[o.x, o.y, 0]} castShadow receiveShadow>
         <meshStandardMaterial color={color} roughness={0.8} />
-      </mesh>
+      </mesh></>
     );
   }
 
   if (o.shape === "circle") {
     return (
-      <mesh
+      <>{outline}<mesh
         position={[o.x, o.y, height / 2]}
         rotation={[Math.PI / 2, 0, 0]}
         castShadow
@@ -384,12 +401,12 @@ function ObstacleMesh({ obstacle: o, danger }: { obstacle: Obstacle; danger: boo
       >
         <cylinderGeometry args={[o.radius ?? 0.1, o.radius ?? 0.1, height, 28]} />
         <meshStandardMaterial color={color} roughness={0.8} />
-      </mesh>
+      </mesh></>
     );
   }
 
   return (
-    <mesh
+    <>{outline}<mesh
       position={[o.x, o.y, height / 2]}
       rotation={[0, 0, o.yaw]}
       castShadow
@@ -397,7 +414,7 @@ function ObstacleMesh({ obstacle: o, danger }: { obstacle: Obstacle; danger: boo
     >
       <boxGeometry args={[o.width ?? 0.2, o.length ?? 0.2, height]} />
       <meshStandardMaterial color={color} roughness={0.8} />
-    </mesh>
+    </mesh></>
   );
 }
 
@@ -418,73 +435,29 @@ function GoalPin({ x, y }: { x: number; y: number }) {
 
 function RobotModel({ robot, carried = false }: { robot: Robot; carried?: boolean }) {
   const group = useRef<THREE.Group>(null);
-  const legs = useRef<(THREE.Mesh | null)[]>([]);
-  const dims = robotDims(robot.footprint);
-  const bodyH = 0.055;
-  const legH = 0.045;
+  const model = sesameGeometry(robot);
 
   // detections arrive ~20 Hz; damp toward them so the model glides
   const target = useRef({ x: robot.x, y: robot.y, yaw: robot.yaw });
   target.current = { x: robot.x, y: robot.y, yaw: robot.yaw };
-  const walking = isWalking(robot.mode) && !carried;
 
-  useFrame((clockState, dt) => {
+  useFrame((_, dt) => {
     const g = group.current;
     if (!g) return;
-    const k = 1 - Math.exp(-12 * dt);
+    const k = carried || (robot.z ?? 0) > 0 ? 1 : 1 - Math.exp(-12 * dt);
     g.position.x += (target.current.x - g.position.x) * k;
     g.position.y += (target.current.y - g.position.y) * k;
-    let d = target.current.yaw - g.rotation.z;
-    d = Math.atan2(Math.sin(d), Math.cos(d));
-    g.rotation.z += d * k;
-
-    const phase = walking ? clockState.clock.elapsedTime * GAIT_RATE : 0;
-    LEG_LAYOUT.forEach(([front, , offset], i) => {
-      const leg = legs.current[i];
-      if (!leg) return;
-      const swing = walking ? Math.sin(phase + offset) * dims.legL * GAIT_STRIDE : 0;
-      leg.position.x = front * dims.hipX + swing;
-      leg.position.z = walking
-        ? legH / 2 + Math.max(0, Math.cos(phase + offset)) * legH * 0.3
-        : legH / 2;
-    });
+    const d = target.current.yaw - g.rotation.z;
+    g.rotation.z += Math.atan2(Math.sin(d), Math.cos(d)) * k;
   });
 
   return (
-    <group
-      ref={group}
-      position={[robot.x, robot.y, carried ? ARM_CARRY_LIFT_M : 0]}
-      rotation={[0, 0, robot.yaw]}
-    >
-      {LEG_LAYOUT.map(([front, left], i) => (
-        <mesh
-          key={i}
-          ref={(m) => {
-            legs.current[i] = m;
-          }}
-          position={[front * dims.hipX, left * (dims.legInner + dims.legSpan / 2), legH / 2]}
-          castShadow
-        >
-          <boxGeometry args={[dims.legL, dims.legSpan, legH]} />
-          <meshStandardMaterial color={CHASSIS_EDGE} roughness={0.7} />
-        </mesh>
-      ))}
-
-      <mesh position={[0, 0, legH + bodyH / 2]} castShadow>
-        <boxGeometry args={[dims.bodyL, dims.bodyW, bodyH]} />
-        <meshStandardMaterial
-          color={robot.tracking ? CHASSIS : "#94a3b8"}
-          roughness={0.55}
-        />
-      </mesh>
-
-      <Eyes
-        bodyL={dims.bodyL}
-        bodyW={dims.bodyW}
-        bodyH={bodyH}
-        faceZ={legH + bodyH * 0.55}
-        tracking={robot.tracking}
-      />
+    <group ref={group} position={[robot.x, robot.y, robot.z ?? (carried ? ARM_CARRY_LIFT_M : 0)]} rotation={[0, 0, robot.yaw]}>
+      <Solids solids={model.solids} animate={() => sesameGeometry(displayRobot(robot, performance.now() / 1000, carried)).solids} />
+      <group position={[0.001, 0.004, model.baseHeight + 0.047]} rotation={[0, 0, -Math.PI / 2]}>
+        <Marker id={robot.tagId} size={0.036} />
+      </group>
+      <Eyes bodyL={0.086} bodyW={0.068} bodyH={0.062} faceZ={model.baseHeight + 0.002} tracking={robot.tracking} />
     </group>
   );
 }
@@ -503,22 +476,22 @@ function Eyes({
   faceZ: number;
   tracking: boolean;
 }) {
-  const r = bodyW * 0.17;
-  const white = tracking ? "#e8eef7" : "#cbd5e1";
-  const pupil = tracking ? "#0b1220" : "#94a3b8";
+  const r = bodyW * 0.075;
+  const white = tracking ? ROBOT_FITTING : "#d5dde5";
+  const pupil = tracking ? ROBOT_FITTING_INSET : "#aab6c1";
 
   return (
-    <group position={[bodyL / 2, 0, faceZ]}>
+    <group position={[bodyL / 2, 0.004, faceZ]}>
       <mesh position={[0.0008, 0, 0]}>
-        <boxGeometry args={[0.0016, bodyW * 0.8, bodyH * 0.68]} />
-        <meshStandardMaterial color="#1c2432" roughness={0.35} metalness={0.1} />
+        <boxGeometry args={[0.0016, bodyW * 0.82, bodyH * 0.4]} />
+        <meshStandardMaterial color="#1c1e22" roughness={0.8} />
       </mesh>
 
       {[-1, 1].map((side) => (
         <group key={side} position={[0.0018, side * bodyW * 0.2, 0]}>
           <mesh scale={[0.45, 1, 1]}>
             <sphereGeometry args={[r, 20, 20]} />
-            <meshStandardMaterial color={white} roughness={0.3} />
+            <meshStandardMaterial color={white} roughness={0.4} metalness={0.25} />
           </mesh>
           {/* pushed past the dome surface so the pupil reads from the front and above */}
           <mesh position={[r * 0.3, 0, r * 0.06]} scale={[0.45, 1, 1]}>

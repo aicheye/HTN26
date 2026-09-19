@@ -52,7 +52,13 @@ export const FACES = [
 ] as const;
 export type FaceName = (typeof FACES)[number] | (string & {});
 
+export type SesameJoint = "R1" | "R2" | "L1" | "L2" | "R4" | "R3" | "L3" | "L4";
+
 export type Robot = {
+  joints?: Partial<Record<SesameJoint, number>>;
+  jointSource?: "commanded" | "measured";
+  shellColor?: string;
+  z?: number;
   id: string; // app label, e.g. "sesame-1"
   tagId: number; // AprilTag number on the robot
   x: number;
@@ -68,6 +74,9 @@ export type Robot = {
 };
 
 export type Obstacle = {
+  color?: string;
+  colorSource?: "detector" | "camera";
+  heightSource?: "measured" | "estimated";
   id: string; // app label, e.g. "obstacle-2"
   source: "tag" | "manual" | "cv";
   shape: "rect" | "circle" | "polygon";
@@ -116,11 +125,20 @@ export type ArmState = {
 };
 
 export type WorldState = {
+  simulation?: {
+    scenario: string;
+    status: "ready" | "running" | "complete" | "blocked";
+    message: string;
+    testGoal: Point;
+  };
   schemaVersion: 1;
   seq: number; // increments every frame
   timestamp: number; // capture time, ms since epoch
 
   arena: {
+    surface?: "wood" | "grid";
+    tagSize?: number;
+    border?: number;
     width: number; // x extent, meters
     length: number; // y extent, meters
     cornerTagIds?: number[]; // fixed calibration tags

@@ -1,14 +1,12 @@
-import { cloneSampleWorldState } from "../data/sampleWorldState";
+import { makeMockScenario, type MockScenarioId } from "../data/mockScenarios";
+import { armGripPosition as armTipPosition, solveUrdfArmIK as solveArmIK, sesameHandleTargets } from "../robot/geometry";
 import {
   ARM_ASSIST_HEIGHT_M,
-  ARM_CARRY_LIFT_M,
   ARM_MAX_REACH,
   ARM_REST_POSE,
-  ARM_TRANSIT_HEIGHT_M,
-  armTipPosition,
   clampArmJoint,
+  distanceTo,
   isWithinArmReach,
-  solveArmIK,
 } from "../components/mapShared";
 import type {
   Ack,
@@ -32,13 +30,13 @@ const ARM_STUCK_TRIGGER_MS = 900;
 
 /** Duration of each phase in the pick-and-carry sequence, ms. */
 const ARM_PHASE_MS: Partial<Record<ArmMode, number>> = {
-  reaching: 900,
-  grasping: 500,
-  lifting: 500,
-  carrying: 1400,
-  placing: 500,
-  releasing: 400,
-  returning: 900,
+  reaching: 1300,
+  grasping: 1500,
+  lifting: 1100,
+  carrying: 2200,
+  placing: 1100,
+  releasing: 600,
+  returning: 1400,
 };
 
 const ARM_NEXT: Partial<Record<ArmMode, ArmMode>> = {
@@ -77,15 +75,60 @@ export class MockSource implements StateSource {
   // through the floor when joint angles are interpolated directly
   private armPoint: Point = { x: 0, y: 0 };
   private armZ = 0;
+  private carryZ = 0.2;
+  private handleOffset = { x: 0, y: 0, z: 0 };
+  private gripOpening = 1;
+  private gripYaw = 0;
+  private phaseStart: Point & { z: number } = { x: 0, y: 0, z: 0 };
+  private paused = false;
 
   private stateSubs = new Set<(s: WorldState) => void>();
   private ackSubs = new Set<(a: Ack) => void>();
   private statusSubs = new Set<(s: ConnectionStatus) => void>();
 
   constructor() {
-    this.state = cloneSampleWorldState();
+    this.state = makeMockScenario("barrier");
     const r = this.robot();
     this.truth = { x: r.x, y: r.y, yaw: r.yaw };
+  }
+
+  resetScenario(id: MockScenarioId) {
+    this.state = makeMockScenario(id);
+    const r = this.robot();
+    this.truth = { x: r.x, y: r.y, yaw: r.yaw };
+    this.bias = { x: 0, y: 0, yaw: 0 };
+    this.active = null;
+    this.poseUntil = 0;
+    this.stuckMs = 0;
+    this.armElapsed = 0;
+    this.armFrom = null;
+    this.armTo = null;
+    this.handleOffset = { x: 0, y: 0, z: 0 };
+    this.gripOpening = 1;
+    this.gripYaw = 0;
+    this.lastBlockedBy = null;
+    this.paused = false;
+    this.lastTick = performance.now();
+    this.stateSubs.forEach((cb) => cb(this.state));
+  }
+
+  runScenarioTest() {
+    this.resetScenario((this.state.simulation?.scenario ?? "barrier") as MockScenarioId);
+    const simulation = this.state.simulation!;
+    simulation.status = "running";
+    simulation.message = "Walking toward the test goal.";
+    this.sendCommand({ id: `mock-test-${Date.now()}`, ts: Date.now(), robotId: this.robot().id,
+      type: "goto", target: simulation.testGoal, speed: 0.3 });
+  }
+
+  private grabHeight() {
+    return this.handleOffset.z;
+  }
+
+  private blockTest(message: string) {
+    this.active = null;
+    this.paused = true;
+    if (this.state.simulation) Object.assign(this.state.simulation, { status: "blocked", message });
   }
 
   subscribe(cb: (s: WorldState) => void) {
@@ -134,10 +177,16 @@ export class MockSource implements StateSource {
       return;
     }
 
+    if (this.paused && this.state.arm?.mode !== "idle" && c.type !== "stop") {
+      this.emitAck({ commandId: c.id, ok: false, error: "Reset the mock scene before resuming a paused lift" });
+      return;
+    }
     if (c.type === "stop") {
       this.active = null;
+      this.paused = true;
       this.state.goal = undefined;
       this.state.path = undefined;
+      if (this.state.simulation) Object.assign(this.state.simulation, { status: "ready", message: "Stopped. Reset or run the test again." });
     } else if (c.type === "face") {
       if (c.face) robot.face = c.face;
     } else if (c.type === "pose") {
@@ -160,6 +209,7 @@ export class MockSource implements StateSource {
       };
       robot.face = c.face ?? "walk";
     }
+    if (c.type !== "stop") this.paused = false;
     this.emitAck({ commandId: c.id, ok: true });
   }
 
@@ -176,10 +226,10 @@ export class MockSource implements StateSource {
     const dt = Math.min((now - this.lastTick) / 1000, 0.2);
     this.lastTick = now;
 
-    const cmd = this.active?.command;
     if (this.active?.expiresAt && Date.now() > this.active.expiresAt) {
       this.active = null;
     }
+    const cmd = this.active?.command;
 
     const robot = this.robot();
     const posing = Date.now() < this.poseUntil;
@@ -192,7 +242,7 @@ export class MockSource implements StateSource {
     const assisting = !!arm && arm.mode !== "idle";
 
     let mode: Robot["mode"] = "idle";
-    if (assisting) {
+    if (assisting || this.paused) {
       mode = "idle";
     } else if (cmd && !posing) {
       mode = this.step(cmd, dt);
@@ -201,15 +251,15 @@ export class MockSource implements StateSource {
       this.stuckMs = 0;
     }
 
-    if (arm) this.advanceArm(arm, dt);
+    if (arm && !this.paused) this.advanceArm(arm, dt);
 
-    // Reported pose = truth + a slowly drifting estimate error, not per-frame hash.
+    // Walking pose includes slowly drifting detector noise; attachment uses the exact gripper pose.
     this.bias.x = this.bias.x * 0.94 + gauss(0.004) * 0.06;
     this.bias.y = this.bias.y * 0.94 + gauss(0.004) * 0.06;
     this.bias.yaw = this.bias.yaw * 0.94 + gauss(0.01) * 0.06;
-    robot.x = this.truth.x + this.bias.x;
-    robot.y = this.truth.y + this.bias.y;
-    robot.yaw = this.truth.yaw + this.bias.yaw;
+    robot.x = this.truth.x + (assisting ? 0 : this.bias.x);
+    robot.y = this.truth.y + (assisting ? 0 : this.bias.y);
+    robot.yaw = this.truth.yaw + (assisting ? 0 : this.bias.yaw);
     robot.lastSeen = Date.now();
     robot.confidence = 0.93;
     robot.mode = mode;
@@ -224,6 +274,7 @@ export class MockSource implements StateSource {
   /** Advances ground truth for one command, returns the resulting mode. */
   private step(cmd: Command, dt: number): Robot["mode"] {
     const speed = clamp(cmd.speed ?? 1, 0, 1);
+    this.lastBlockedBy = null;
 
     if (cmd.type === "left" || cmd.type === "right") {
       const dir = cmd.type === "left" ? 1 : -1;
@@ -239,6 +290,7 @@ export class MockSource implements StateSource {
         this.active = null;
         this.state.goal = undefined;
         this.state.path = undefined;
+        if (this.state.simulation?.status === "running") Object.assign(this.state.simulation, { status: "complete", message: "Reached the test goal." });
         return "idle";
       }
       const desired = Math.atan2(dy, dx);
@@ -250,7 +302,7 @@ export class MockSource implements StateSource {
         this.state.path = [{ x: this.truth.x, y: this.truth.y }, { ...cmd.target }];
         return "turning";
       }
-      this.advance(Math.min(LINEAR_SPEED * dt, dist));
+      this.advance(Math.min(LINEAR_SPEED * speed * dt, dist));
       this.state.path = [{ x: this.truth.x, y: this.truth.y }, { ...cmd.target }];
       return "moving";
     }
@@ -269,7 +321,7 @@ export class MockSource implements StateSource {
     const ny = this.truth.y + Math.sin(this.truth.yaw) * distance;
     const { width, length } = this.state.arena;
     const r = this.robot();
-    const margin = Math.max(r.footprint.width, r.footprint.length) / 2;
+    const margin = Math.hypot(r.footprint.width, r.footprint.length) / 2;
 
     const cx = clamp(nx, margin, width - margin);
     const cy = clamp(ny, margin, length - margin);
@@ -306,9 +358,12 @@ export class MockSource implements StateSource {
     this.stuckMs = 0;
 
     // the arm only serves its own working envelope; outside it the robot is on its own
-    if (!isWithinArmReach(arm.mount, this.truth)) return;
+    if (!isWithinArmReach(arm.mount, this.truth)) {
+      this.blockTest("Obstacle detected outside the arm's reach. No rescue attempted.");
+      return;
+    }
 
-    const margin = Math.max(robot.footprint.width, robot.footprint.length) / 2;
+    const margin = Math.hypot(robot.footprint.width, robot.footprint.length) / 2;
     const { width, length } = this.state.arena;
     const goal = this.state.goal;
 
@@ -363,64 +418,119 @@ export class MockSource implements StateSource {
         if (drop) break;
       }
     }
-    if (!drop) return;
+    if (!drop) {
+      this.blockTest("No clear landing point inside the arm's reach.");
+      return;
+    }
 
-    this.armFrom = { x: this.truth.x, y: this.truth.y };
-    this.armTo = drop;
+    const route = Array.from({ length: 13 }, (_, i) => ({ x: lerp(this.truth.x, drop!.x, i / 12), y: lerp(this.truth.y, drop!.y, i / 12) }));
+    const crossed = this.state.obstacles.filter((o) => route.some((p) => distanceTo(o, p) < margin));
+    const clearance = Math.max(0.06, ...crossed.map((o) => o.height ?? 0)) + 0.03;
+    this.gripYaw = this.truth.yaw;
+    const handles = sesameHandleTargets({ ...robot, yaw: this.gripYaw }).sort((a, b) =>
+      Math.hypot(this.truth.x + a.offset.x - arm.mount.x, this.truth.y + a.offset.y - arm.mount.y)
+      - Math.hypot(this.truth.x + b.offset.x - arm.mount.x, this.truth.y + b.offset.y - arm.mount.y));
+    const handle = handles.find(({ offset }) => {
+      let seed = arm.joints;
+      const from = { x: this.truth.x + offset.x, y: this.truth.y + offset.y };
+      const to = { x: drop!.x + offset.x, y: drop!.y + offset.y };
+      const waypoints = [{ ...from, z: offset.z + 0.035, opening: 1 }, { ...from, z: offset.z, opening: 1 },
+        { ...from, z: offset.z, opening: 0 },
+        ...route.map((p) => ({ x: p.x + offset.x, y: p.y + offset.y, z: offset.z + clearance, opening: 0 })),
+        { ...to, z: offset.z, opening: 0 }, { ...to, z: offset.z, opening: 1 }, { ...to, z: offset.z + 0.035, opening: 1 }];
+      return waypoints.every((target) => {
+        seed = solveArmIK(arm.mount, target, target.z, seed, { yaw: this.gripYaw, opening: target.opening });
+        const reached = armTipPosition(arm.mount, seed);
+        return Math.hypot(reached.x - target.x, reached.y - target.y, reached.z - target.z) < 0.002;
+      });
+    });
+    if (!handle) {
+      this.blockTest("Handle pickup or clearance path is outside the URDF joint limits. Move the obstacle closer.");
+      return;
+    }
+    this.handleOffset = handle.offset;
+    this.armFrom = { x: this.truth.x + handle.offset.x, y: this.truth.y + handle.offset.y };
+    this.armTo = { x: drop.x + handle.offset.x, y: drop.y + handle.offset.y };
+    this.carryZ = this.grabHeight() + clearance;
+    this.gripOpening = clamp((arm.joints.gripper + 0.05) / 0.95, 0, 1);
     this.armElapsed = 0;
     // start the Cartesian smoothing from wherever the gripper currently sits
     const tip = armTipPosition(arm.mount, arm.joints);
     this.armPoint = { x: tip.x, y: tip.y };
     this.armZ = tip.z;
+    this.phaseStart = tip;
     arm.mode = "reaching";
     arm.targetRobotId = robot.id;
+    if (this.state.simulation) this.state.simulation.message = "Obstacle detected. Arm reaching for Sesame.";
   }
 
   /** Advances the arm's phase timer, joint pose, and (while carrying) the robot's position. */
   private advanceArm(arm: NonNullable<WorldState["arm"]>, dt: number) {
     if (arm.mode === "idle") return;
     this.armElapsed += dt * 1000;
-
-    if (arm.mode === "carrying" && this.armFrom && this.armTo) {
-      const dur = ARM_PHASE_MS.carrying ?? 1;
-      const t = easeInOut(clamp(this.armElapsed / dur, 0, 1));
-      this.truth.x = lerp(this.armFrom.x, this.armTo.x, t);
-      this.truth.y = lerp(this.armFrom.y, this.armTo.y, t);
-    }
-
+    const dur = ARM_PHASE_MS[arm.mode] ?? 1000;
+    const t = easeInOut(clamp(this.armElapsed / (arm.mode === "grasping" ? dur * 0.6 : dur), 0, 1));
     const k = 1 - Math.exp(-8 * dt);
 
-    // move the gripper's target point in a straight Cartesian line (and re-solve IK each
-    // frame) so the tip's height changes monotonically and can't dip through the floor -
-    // "returning" aims at the rest pose's own tip position, not its (very folded) angles,
-    // since interpolating those angles directly swings the tip below the floor partway through
+    // Move the tool along a time-parameterised Cartesian segment using the URDF chain.
+    // Only advance phases once the actual tool reaches the requested endpoint.
+    // Returning also follows a tool-space segment rather than swinging through the floor.
+    // The carried robot is attached to the solved tool position, never a separate animation.
     const { point, z, gripper } = this.armPhaseTarget(arm);
-    this.armPoint.x += (point.x - this.armPoint.x) * k;
-    this.armPoint.y += (point.y - this.armPoint.y) * k;
-    this.armZ += (z - this.armZ) * k;
-    const ik = solveArmIK(arm.mount, this.armPoint, this.armZ);
+    this.armPoint = { x: lerp(this.phaseStart.x, point.x, t), y: lerp(this.phaseStart.y, point.y, t) };
+    this.armZ = lerp(this.phaseStart.z, z, t);
+    if (arm.mode === "returning") {
+      const retreatZ = this.phaseStart.z + 0.035;
+      const u = easeInOut(clamp((this.armElapsed / dur - 0.35) / 0.65, 0, 1));
+      this.armPoint = { x: lerp(this.phaseStart.x, point.x, u), y: lerp(this.phaseStart.y, point.y, u) };
+      this.armZ = this.armElapsed < dur * 0.35
+        ? lerp(this.phaseStart.z, retreatZ, easeInOut(this.armElapsed / (dur * 0.35))) : lerp(retreatZ, z, u);
+    }
+    const current = armTipPosition(arm.mount, arm.joints);
+    const aligned = Math.hypot(current.x - point.x, current.y - point.y, current.z - z) < 0.0015;
+    const opening = arm.mode === "grasping" && (!aligned || this.armElapsed < dur * 0.6) ? 1 : gripper;
+    this.gripOpening += (opening - this.gripOpening) * k;
+    const ik = solveArmIK(arm.mount, this.armPoint, this.armZ, arm.joints, { yaw: this.gripYaw, opening: this.gripOpening });
     arm.joints.waist = clampArmJoint("waist", ik.waist);
     arm.joints.shoulder = clampArmJoint("shoulder", ik.shoulder);
     arm.joints.elbow = clampArmJoint("elbow", ik.elbow);
     arm.joints.wristPitch = clampArmJoint("wristPitch", ik.wristPitch);
-    arm.joints.wristRoll = 0;
-    arm.joints.gripper += (gripper - arm.joints.gripper) * k;
-
-    const dur = ARM_PHASE_MS[arm.mode];
-    if (dur !== undefined && this.armElapsed >= dur) {
+    arm.joints.wristRoll = clampArmJoint("wristRoll", ik.wristRoll);
+    arm.joints.gripper = clampArmJoint("gripper", ik.gripper);
+    const tip = armTipPosition(arm.mount, arm.joints);
+    if (["lifting", "carrying", "placing"].includes(arm.mode)) {
+      this.truth.x = tip.x - this.handleOffset.x;
+      this.truth.y = tip.y - this.handleOffset.y;
+      this.robot().z = Math.max(0, tip.z - this.grabHeight());
+    }
+    const error = Math.hypot(tip.x - point.x, tip.y - point.y, tip.z - z);
+    if (this.armElapsed > dur + 4000 && (error > 0.0015 || Math.abs(this.gripOpening - gripper) >= 0.005)) {
+      this.blockTest(`Arm could not reach the ${arm.mode} endpoint within joint limits.`);
+      return;
+    }
+    if (this.armElapsed >= dur && error < 0.0015 && Math.abs(this.gripOpening - gripper) < 0.005) {
       this.armElapsed = 0;
+      this.phaseStart = tip;
       const next = ARM_NEXT[arm.mode] ?? "idle";
+      if (next === "releasing") this.robot().z = 0;
       arm.mode = next;
+      if (this.state.simulation) this.state.simulation.message = `Arm: ${next}.`;
       if (next === "idle") {
-        // snap into the exact folded rest shape now that the tip has arrived at its position
-        arm.joints = { ...ARM_REST_POSE, waist: 0 };
+        // Retain the solved resting pose rather than snapping between IK branches.
         arm.targetRobotId = undefined;
         this.armFrom = null;
         this.armTo = null;
-        // the rescue is done; drop the command and goal so it doesn't march back in
-        this.active = null;
-        this.state.goal = undefined;
-        this.state.path = undefined;
+        const command = this.active?.command;
+        if (command?.type === "goto" && command.target) {
+          this.state.path = [{ x: this.truth.x, y: this.truth.y }, { ...command.target }];
+          if (this.state.simulation) this.state.simulation.message = "Carry complete. Continuing toward the destination.";
+        } else {
+          // The rescue is done; clear its command so the robot stays at the landing point.
+          this.active = null;
+          this.state.goal = undefined;
+          this.state.path = undefined;
+          if (this.state.simulation) Object.assign(this.state.simulation, { status: "complete", message: "Carry complete: Sesame placed beyond the obstacle." });
+        }
       }
     }
   }
@@ -435,28 +545,14 @@ export class MockSource implements StateSource {
       // aim at the rest pose's own tip position (not its very-folded angles) so the
       // Cartesian smoothing below can't swing the tip below the floor on the way there
       const tip = armTipPosition(arm.mount, { ...ARM_REST_POSE, waist: 0 });
-      return { point: { x: tip.x, y: tip.y }, z: tip.z, gripper: 0.1 };
+      return { point: { x: tip.x, y: tip.y }, z: tip.z, gripper: 1 };
     }
 
-    const point =
-      arm.mode === "carrying"
-        ? { x: this.truth.x, y: this.truth.y }
-        : arm.mode === "placing" || arm.mode === "releasing"
-          ? (this.armTo ?? this.truth)
-          : (this.armFrom ?? this.truth);
-
-    const z =
-      arm.mode === "reaching"
-        ? ARM_TRANSIT_HEIGHT_M
-        : arm.mode === "lifting" || arm.mode === "carrying"
-          ? ARM_CARRY_LIFT_M
-          : arm.mode === "placing"
-            ? ARM_CARRY_LIFT_M *
-              (1 - easeInOut(clamp(this.armElapsed / (ARM_PHASE_MS.placing ?? 1), 0, 1)))
-            : 0;
-
-    const gripper =
-      arm.mode === "reaching" || arm.mode === "releasing" ? 0.6 : arm.mode === "idle" ? 0.1 : 0;
+    const point = ["carrying", "placing", "releasing"].includes(arm.mode)
+      ? (this.armTo ?? this.truth) : (this.armFrom ?? this.truth);
+    const z = arm.mode === "reaching" ? this.grabHeight() + 0.035
+      : arm.mode === "lifting" || arm.mode === "carrying" ? this.carryZ : this.grabHeight();
+    const gripper = arm.mode === "reaching" || arm.mode === "releasing" ? 1 : 0;
 
     return { point, z, gripper };
   }
@@ -467,7 +563,7 @@ function circleHitsObstacle(x: number, y: number, radius: number, o: Obstacle): 
     return Math.hypot(x - o.x, y - o.y) < (o.radius ?? 0) + radius;
   }
   if (o.shape === "polygon" && o.points?.length) {
-    return pointInPolygon({ x, y }, o.points);
+    return pointInPolygon({ x, y }, o.points) || distanceTo(o, { x, y }) < radius;
   }
   // rect: test in the obstacle's local frame
   const dx = x - o.x;
