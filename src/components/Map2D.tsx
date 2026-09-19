@@ -1,5 +1,20 @@
 import { useEffect, useRef } from "react";
 import type { MapProps } from "./MapProps";
+import {
+  CHASSIS,
+  CHASSIS_EDGE,
+  DANGER_M,
+  FLOOR_EDGE,
+  GAIT_RATE,
+  GAIT_STRIDE,
+  GRID,
+  OBSTACLE,
+  OBSTACLE_DANGER,
+  SHADOW,
+  TILE_M,
+  distanceTo,
+  isWalking,
+} from "./mapShared";
 import type { Obstacle, Point, Robot, WorldState } from "../types/world";
 
 const PADDING = 20; // px around the arena
@@ -77,17 +92,6 @@ function toPx(p: Point, v: View): [number, number] {
 }
 
 const FLOOR = "#e2e8f0";
-const FLOOR_EDGE = "#cbd5e1";
-const GRID = "#ffffff";
-const TILE_M = 0.3; // floor tile size in meters
-const OBSTACLE = "#475569";
-const OBSTACLE_DANGER = "#b91c1c";
-const SHADOW = "rgba(15, 23, 42, 0.3)";
-const CHASSIS = "#111111";
-const CHASSIS_EDGE = "#000000";
-
-/** Proximity at which an obstacle is flagged as a danger, in meters. */
-const DANGER_M = 0.12;
 
 function render(
   ctx: CanvasRenderingContext2D,
@@ -278,26 +282,6 @@ function drawObstacle(
   ctx.restore();
 }
 
-/** Rough distance from a point to an obstacle, used only for the danger highlight. */
-function distanceTo(o: Obstacle, p: Point): number {
-  if (o.shape === "circle") {
-    return Math.max(0, Math.hypot(p.x - o.x, p.y - o.y) - (o.radius ?? 0));
-  }
-  if (o.shape === "polygon" && o.points?.length) {
-    return Math.max(
-      0,
-      Math.min(...o.points.map((q) => Math.hypot(p.x - q.x, p.y - q.y))) - 0.05,
-    );
-  }
-  const dx = p.x - o.x;
-  const dy = p.y - o.y;
-  const c = Math.cos(-o.yaw);
-  const s = Math.sin(-o.yaw);
-  const lx = Math.abs(dx * c - dy * s) - (o.width ?? 0) / 2;
-  const ly = Math.abs(dx * s + dy * c) - (o.length ?? 0) / 2;
-  return Math.hypot(Math.max(lx, 0), Math.max(ly, 0));
-}
-
 function drawPath(ctx: CanvasRenderingContext2D, path: Point[] | undefined, v: View) {
   if (!path || path.length < 2) return;
   ctx.save();
@@ -364,9 +348,9 @@ function drawRobot(ctx: CanvasRenderingContext2D, r: Robot, v: View) {
   const edge = r.tracking ? CHASSIS_EDGE : "#64748b";
 
   // diagonal-pair trot while a drive command is active
-  const gait = r.mode === "moving" || r.mode === "turning";
-  const phase = gait ? (performance.now() / 1000) * 9 : 0;
-  const stride = gait ? legL * 0.45 : 0;
+  const gait = isWalking(r.mode);
+  const phase = gait ? (performance.now() / 1000) * GAIT_RATE : 0;
+  const stride = gait ? legL * GAIT_STRIDE : 0;
 
   ctx.save();
   ctx.translate(cx, cy);
