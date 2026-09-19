@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Tracker demo</title>
+<!-- Reference client for pi/API.md. Open over http (not https) while on the Sesame-Controller WiFi:
+       cd pi/client && python3 -m http.server 5500   then   http://localhost:5500/demo.html?host=qnxpi78.local&unit=3 -->
+<style>
+  body { font-family: sans-serif; margin: 12px; background: #111; color: #ddd; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .view { position: relative; width: 960px; max-width: 100%; }
+  .view img, .view canvas { width: 100%; display: block; }
+  .view canvas { position: absolute; left: 0; top: 0; }
+  #map { background: #222; width: 380px; height: 300px; }
+  pre { font-size: 12px; white-space: pre-wrap; }
+</style>
+<div class="row">
+  <div class="view"><img id="frame"><canvas id="overlay"></canvas></div>
+  <div><canvas id="map" width="380" height="300"></canvas><pre id="status">connecting</pre></div>
+</div>
+<script type="module">
+import { pixelToFloor } from "./floor.js";
+const query = new URLSearchParams(location.search);
+const base = `http://${query.get("host") ?? "qnxpi78.local"}:${8000 + Number(query.get("unit") ?? 3)}`;
+const frame = document.getElementById("frame"), overlay = document.getElementById("overlay"), map = document.getElementById("map");
+
+// Objects come from the detector, not from the Pi. Boxes are in full-frame pixels: [left, top, right, bottom].
+// Call setObjects([...]) from the console, or replace this with your own source.
+let objects = [];
+window.setObjects = (list) => { objects = list; };
+
+setInterval(() => { frame.src = `${base}/frame.jpg?w=960&t=${Date.now()}`; }, 500);
+
+new EventSource(`${base}/events`).onmessage = (event) => {
+  const state = JSON.parse(event.data);
+  const [frameW, frameH] = state.frame, [floorW, floorH] = state.floor;
+  document.getElementById("status").textContent = JSON.stringify({ ...state, camera: undefined }, null, 1);
+
+  // Camera view: everything is drawn in full-frame pixels, scaled to the canvas.
+  overlay.width = frame.clientWidth; overlay.height = frame.clientHeight;
+  const g = overlay.getContext("2d"), k = overlay.width / frameW;
+  g.lineWidth = 2; g.font = "14px sans-serif";
+  for (const o of objects) {
+    const [l, t, r, b] = o.box;
+    g.strokeStyle = g.fillStyle = o.target ? "#4f4" : "#fa0";
+    g.strokeRect(l * k, t * k, (r - l) * k, (b - t) * k);
+    g.fillText(o.label, l * k, t * k - 4);
+  }
+  for (const [name, colour] of [["robot", "#4cf"], ["arm", "#f6c"]]) {
+    const pose = state[name];
+    if (!pose) continue;
+    g.strokeStyle = g.fillStyle = colour;
+    g.beginPath(); g.arc(pose.px[0] * k, pose.px[1] * k, 10, 0, 7); g.stroke();
+    g.fillText(name, pose.px[0] * k + 14, pose.px[1] * k);
+  }
+
+  // Top-down map in floor centimetres. Needs a calibrated frame.
+  const m = map.getContext("2d"), pad = 30, s = Math.min((map.width - 2 * pad) / floorW, (map.height - 2 * pad) / floorH);
+  const at = (x, y) => [pad + x * s, pad + y * s];
+  m.clearRect(0, 0, map.width, map.height);
+  m.strokeStyle = "#666"; m.strokeRect(pad, pad, floorW * s, floorH * s);
+  if (!state.calibrated) return;
+  for (const o of objects) {
+    const [l, t, r, b] = o.box, p = pixelToFloor(state.camera, (l + r) / 2, (t + b) / 2);
+    m.fillStyle = o.target ? "#4f4" : "#fa0";
+    m.fillRect(...at(p.x, p.y).map((n) => n - 5), 10, 10);
+    m.fillText(o.label, at(p.x, p.y)[0] + 8, at(p.x, p.y)[1]);
+  }
+  for (const [name, colour] of [["robot", "#4cf"], ["arm", "#f6c"]]) {
+    const pose = state[name];
+    if (!pose) continue;
+    const [x, y] = at(pose.x, pose.y), a = (pose.heading * Math.PI) / 180;
+    m.strokeStyle = m.fillStyle = colour;
+    m.beginPath(); m.arc(x, y, 8, 0, 7); m.moveTo(x, y); m.lineTo(x + 18 * Math.cos(a), y + 18 * Math.sin(a)); m.stroke();
+    m.fillText(name, x + 12, y - 10);
+  }
+};
+</script>
