@@ -11,11 +11,15 @@ import {
 import {
   createSource,
   DEFAULT_SOURCE,
+  getWsUrl,
+  setWsUrl as persistWsUrl,
   type ConnectionStatus,
   type SourceKind,
 } from "../sources";
 import { SesameHttpBridge } from "../robot/sesameApi";
 import type { Ack, Command, CommandType, WorldState } from "../types/world";
+
+const ACK_TIMEOUT_MS = 4000;
 
 export type LogEntry = {
   command: Command;
@@ -27,6 +31,8 @@ type StateContextValue = {
   status: ConnectionStatus;
   sourceKind: SourceKind;
   setSourceKind: (k: SourceKind) => void;
+  wsUrl: string;
+  setWsUrl: (url: string) => void;
   selectedRobotId: string | null;
   setSelectedRobotId: (id: string) => void;
   speed: number;
@@ -52,19 +58,29 @@ function nextCommandId() {
 
 export function StateProvider({ children }: { children: ReactNode }) {
   const [sourceKind, setSourceKind] = useState<SourceKind>(DEFAULT_SOURCE);
+  const [wsUrl, setWsUrlState] = useState<string>(getWsUrl());
   const [state, setState] = useState<WorldState | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null);
   const [speed, setSpeed] = useState(1);
   const [log, setLog] = useState<LogEntry[]>([]);
 
-  const source = useMemo(() => createSource(sourceKind), [sourceKind]);
+  const setWsUrl = useCallback((url: string) => {
+    persistWsUrl(url);
+    setWsUrlState(getWsUrl());
+  }, []);
+
+  const source = useMemo(
+    () => createSource(sourceKind, wsUrl),
+    [sourceKind, wsUrl],
+  );
   const sourceRef = useRef(source);
   sourceRef.current = source;
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedRobotId;
   const speedRef = useRef(speed);
   speedRef.current = speed;
+  const ackedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setState(null);
@@ -76,6 +92,7 @@ export function StateProvider({ children }: { children: ReactNode }) {
       }
     });
     const unsubAck = source.onAck?.((ack) => {
+      ackedRef.current.add(ack.commandId);
       setLog((prev) =>
         prev.map((e) => (e.command.id === ack.commandId ? { ...e, ack } : e)),
       );
@@ -105,6 +122,17 @@ export function StateProvider({ children }: { children: ReactNode }) {
       setLog((prev) => [{ command }, ...prev].slice(0, LOG_MAX));
       sourceRef.current.sendCommand(command);
       robotBridge?.send(command);
+
+      window.setTimeout(() => {
+        if (ackedRef.current.has(command.id)) return;
+        setLog((prev) =>
+          prev.map((e) =>
+            e.command.id === command.id && !e.ack
+              ? { ...e, ack: { commandId: command.id, ok: false, error: "timed out" } }
+              : e,
+          ),
+        );
+      }, ACK_TIMEOUT_MS);
     },
     [],
   );
@@ -113,6 +141,8 @@ export function StateProvider({ children }: { children: ReactNode }) {
     status,
     sourceKind,
     setSourceKind,
+    wsUrl,
+    setWsUrl,
     selectedRobotId,
     setSelectedRobotId,
     speed,

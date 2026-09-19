@@ -12,6 +12,8 @@ export default function App() {
     selectedRobotId,
     sourceKind,
     setSourceKind,
+    wsUrl,
+    setWsUrl,
     status,
     speed,
     setSpeed,
@@ -96,6 +98,18 @@ export default function App() {
                     onChange={(v) => setSourceKind(v as "mock" | "ws")}
                   />
                 </Field>
+                {sourceKind === "ws" && (
+                  <label className="block text-xs font-medium text-zinc-400">
+                    WebSocket URL
+                    <input
+                      type="text"
+                      defaultValue={wsUrl}
+                      onBlur={(e) => setWsUrl(e.target.value.trim())}
+                      placeholder="ws://localhost:8080/ws"
+                      className="mt-1 w-full rounded border border-zinc-700 bg-zinc-800 px-2 py-1 font-mono text-xs text-zinc-200"
+                    />
+                  </label>
+                )}
                 <Field label="Main view">
                   <Segmented
                     value={mainView}

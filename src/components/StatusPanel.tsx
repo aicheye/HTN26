@@ -1,5 +1,9 @@
 import { useWorld } from "../state/StateProvider";
 
+function staleMs(lastSeen: number): number {
+  return Math.max(0, Date.now() - lastSeen);
+}
+
 export function Telemetry() {
   const { state, selectedRobotId, setSelectedRobotId } = useWorld();
   const robot = state?.robots.find((r) => r.id === selectedRobotId) ?? state?.robots[0];
@@ -23,13 +27,14 @@ export function Telemetry() {
       )}
       {!robot.tracking && (
         <p className="rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-300">
-          Tag not detected — showing last known pose.
+          {robot.mode === "lost" ? "Lost — " : ""}Tag not detected — showing last known pose
+          {staleMs(robot.lastSeen) > 1000 ? ` (${(staleMs(robot.lastSeen) / 1000).toFixed(1)}s ago)` : ""}.
         </p>
       )}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
         <Row label="Robot" value={robot.id} />
         <Row label="Tag" value={`#${robot.tagId}`} />
-        <Row label="Mode" value={robot.mode} />
+        <Row label="Mode" value={robot.mode} muted={robot.mode === "lost"} />
         <Row label="X" value={`${robot.x.toFixed(3)} m`} />
         <Row label="Y" value={`${robot.y.toFixed(3)} m`} />
         <Row label="Yaw" value={`${((robot.yaw * 180) / Math.PI).toFixed(1)}°`} />
@@ -38,6 +43,7 @@ export function Telemetry() {
           value={robot.tracking ? "Yes" : "No"}
           muted={!robot.tracking}
         />
+        <Row label="Last seen" value={`${(staleMs(robot.lastSeen) / 1000).toFixed(1)}s ago`} />
         <Row
           label="Conf"
           value={robot.confidence != null ? robot.confidence.toFixed(2) : "—"}

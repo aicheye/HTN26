@@ -32,10 +32,16 @@ Emit `state` at 10–30 Hz. Reply to each `command` with an `ack` carrying the s
    VITE_SOURCE=ws
    VITE_WS_URL=ws://<host>:<port>/ws
    ```
-3. Or flip the `source` toggle in the header at runtime.
+3. Or flip the `source` toggle in Settings at runtime - the WebSocket URL field right
+   below it also updates live (persisted to `localStorage`, no rebuild needed), so a
+   teammate can point the same build at a different bridge host without touching `.env`.
 
-Nothing else in the frontend changes: [src/sources/WebSocketSource.ts](src/sources/WebSocketSource.ts)
-already implements the same `StateSource` interface as the mock generator.
+[src/sources/WebSocketSource.ts](src/sources/WebSocketSource.ts) implements the same
+`StateSource` interface as the mock generator. It drops (and `console.warn`s) any state
+frame missing `arena.width/length` or the `robots`/`obstacles` arrays, instead of letting
+a malformed frame crash the renderer - a bridge restart mid-write is expected to just
+skip a frame, not take down the UI. Commands that haven't received an ack within 4s are
+marked `timed out` in the command log (still just a UI hint - there's no retry).
 
 ## 4. Commands the frontend sends
 
@@ -72,3 +78,30 @@ To drive the real robot straight from this UI while still using mock vision, set
 `VITE_ROBOT_URL=http://sesame-robot.local`. Every command is then also POSTed to the
 firmware. Note the firmware is plain HTTP with no auth, so serve the UI over HTTP on the
 same LAN (a browser on an HTTPS page will block the mixed-content request).
+
+## 6. The reference bridge (`bridge/`, `pi/`)
+
+`bridge/bridge.mjs` is a real implementation of this contract - it bridges the Pi tracker
+(TCP, cm/degrees) and the robot firmware (WebSocket) into `ws://localhost:8080/ws` in this
+file's exact schema. `bridge/sim.mjs` fakes both of those (`cd bridge && npm run sim`) so
+the frontend can be developed against a live, moving robot with no hardware at all.
+
+Fields the bridge sends are sparser than the mock's sample data - the frontend has to
+degrade gracefully rather than assume every optional field is present:
+
+- `robots[].confidence` is never sent (mock-only). `calibration.reprojectionError` is
+  never sent either - only `calibration.ok`.
+- `obstacles[].height` is never sent for CV-detected boxes (no depth info from one
+  camera) - height-dependent logic (e.g. "too tall to climb") only runs in `MockSource`,
+  never against live bridge data.
+- There is **no `arm` field at all** - the real arm has no joint telemetry, only a
+  tracked ArUco tag on its base, reported as a plain circle obstacle
+  (`id: "so101-base"`). `WebSocketSource.withArm()` turns that into a resting `ArmState`
+  (folded rest-pose joints, `mode: "idle"`) so the articulated 3D model still renders -
+  it snaps the mount to the exact center of whichever of the arena's two longer edges
+  the tag is nearest to, since the physical mount is fixed there and the tracked position
+  is noisy. It will never show the pick-and-place animation live; that's a `MockSource`-only
+  demo until the bridge reports real joint angles.
+- `robot.mode` can be `"lost"` (bridge-only value, no camera lock at all) in addition to
+  `!robot.tracking` (stale last-known pose). Telemetry shows both, plus a live
+  "last seen Xs ago" instead of a raw timestamp.

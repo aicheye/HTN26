@@ -53,8 +53,13 @@ export class WebSocketSource implements StateSource {
       } catch {
         return;
       }
-      if (msg.type === "state") this.stateSubs.forEach((cb) => cb(this.withArm(msg.data)));
-      else if (msg.type === "ack") this.ackSubs.forEach((cb) => cb(msg.data));
+      if (msg.type === "state") {
+        if (!isWorldState(msg.data)) {
+          console.warn("WebSocketSource: dropped malformed state frame", msg.data);
+          return;
+        }
+        this.stateSubs.forEach((cb) => cb(this.withArm(msg.data)));
+      } else if (msg.type === "ack") this.ackSubs.forEach((cb) => cb(msg.data));
     };
     ws.onerror = () => this.status("error");
     ws.onclose = () => {
@@ -118,4 +123,23 @@ export class WebSocketSource implements StateSource {
       arm: { mount, joints: ARM_REST_POSE, mode: "idle" },
     };
   }
+}
+
+/**
+ * Just enough shape-checking to keep a malformed/partial frame from crashing the
+ * renderer (e.g. a bridge restart sending a half-written payload). Not a full
+ * schema validator - just the fields Map2D/Map3D/StatusPanel dereference directly.
+ */
+function isWorldState(data: unknown): data is WorldState {
+  if (!data || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+  const arena = d.arena as Record<string, unknown> | undefined;
+  return (
+    typeof arena === "object" &&
+    arena !== null &&
+    typeof arena.width === "number" &&
+    typeof arena.length === "number" &&
+    Array.isArray(d.robots) &&
+    Array.isArray(d.obstacles)
+  );
 }
