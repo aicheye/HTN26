@@ -1,3 +1,12 @@
 .venv/
 __pycache__/
 lerobot/
+.pio/
+.vscode/
+node_modules/
+
+# Output copied back from the Pi, and QNX's own headers (not ours to redistribute)
+pi/*.log
+pi/*.txt
+pi/*.jpg
+pi/qnx-camera-headers/
