@@ -207,7 +207,7 @@ int main(int argc, char** argv) {
               floorW, floorH);
 
   if (lensCode >= 0) {
-    int error = lensSetCode(unit, lensCode);
+    int error = lensApproach(unit, lensCode);
     std::printf("lens code %d on %s: %s\n", lensCode, lensBusForUnit(unit), error ? std::strerror(error) : "set");
   }
 
