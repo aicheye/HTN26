@@ -94,6 +94,8 @@ int main(int argc, char** argv) {
   if (bestSharpness > 0) std::printf(" (best seen in the sweep: %.1f)", bestSharpness);
   std::printf("\n");
   cv::imwrite("focus-unit" + std::to_string(unit) + ".jpg", frame);
+  lensSaveCode(unit, best);
+  std::printf("saved to %s. The tracker uses it when no lens code is given.\n", lensCodeFile(unit).c_str());
   camera_stop_viewfinder(handle);
   camera_close(handle);
   return 0;

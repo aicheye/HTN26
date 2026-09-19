@@ -14,7 +14,10 @@
 #include <unistd.h>
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 inline const char* lensBusForUnit(int unit) { return unit == 4 ? "/dev/i2c4" : "/dev/i2c6"; }
 
@@ -65,4 +68,28 @@ inline int lensApproach(int unit, int code) {
   int error = lensSetCode(unit, code);
   usleep(150000);
   return error;
+}
+
+// The focus tool saves the code it found per camera unit, and the tracker reads it back, so nobody has to
+// copy the number by hand.
+inline std::string lensCodeFile(int unit) {
+  const char* home = std::getenv("HOME");
+  return std::string(home ? home : ".") + "/lens-unit" + std::to_string(unit) + ".txt";
+}
+
+inline void lensSaveCode(int unit, int code) {
+  if (FILE* file = std::fopen(lensCodeFile(unit).c_str(), "w")) {
+    std::fprintf(file, "%d\n", code);
+    std::fclose(file);
+  }
+}
+
+// Returns -1 when no code has been saved for this unit.
+inline int lensLoadCode(int unit) {
+  int code = -1;
+  if (FILE* file = std::fopen(lensCodeFile(unit).c_str(), "r")) {
+    if (std::fscanf(file, "%d", &code) != 1) code = -1;
+    std::fclose(file);
+  }
+  return code;
 }

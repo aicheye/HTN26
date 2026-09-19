@@ -2,8 +2,8 @@
 // and streams the robot's pose as one JSON object per line over TCP.
 //   ./tracker <unit> <floor width cm> <floor height cm> [lens code]
 // QNX's driver for this camera has no autofocus (tried on the Pi: error 22, no manual focus steps).
-// A lens code (0 to 1023, see lens.h) sets the focus motor directly. pi/run-focus.sh finds the best code.
-// Without one the lens stays where it is.
+// A lens code (0 to 1023, see lens.h) sets the focus motor directly. pi/run-focus.sh finds the best code and
+// saves it on the Pi. Without a lens code argument the tracker uses the saved one.
 // Marker 0 is on the robot. Marker 5 is taped flat on the floor against the base of the SO-101 arm.
 // Markers 1 to 4 are taped flat on the floor at the corners of a
 // rectangle: 1 = (0, 0), 2 = (W, 0), 3 = (W, H), 4 = (0, H).
@@ -180,7 +180,16 @@ int main(int argc, char** argv) {
   }
   int unit = std::atoi(argv[1]);
   float floorW = std::atof(argv[2]), floorH = std::atof(argv[3]);
-  int lensCode = argc > 4 ? std::atoi(argv[4]) : -1;
+  int lensCode = lensLoadCode(unit);  // saved by the focus tool
+  if (argc > 4) {
+    char* end = nullptr;
+    long value = std::strtol(argv[4], &end, 10);
+    if (*end != '\0' || value < 0 || value > 1023) {
+      std::printf("lens code must be a number from 0 to 1023, got \"%s\"\n", argv[4]);
+      return 1;
+    }
+    lensCode = (int)value;
+  }
   int port = 9000 + unit;
   std::signal(SIGPIPE, SIG_IGN);  // a client that disconnects must not kill the tracker
 
