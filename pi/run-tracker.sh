@@ -1,5 +1,5 @@
 # Runs on the laptop while on the Sesame-Controller WiFi, from the HTN repo root:
-#   sh pi/run-tracker.sh <unit> <floor width cm> <floor height cm> [focus step]
+#   sh pi/run-tracker.sh <unit> <floor width cm> <floor height cm> [lens code]
 # Copies the tracker to the Pi, builds it, runs it for 20 seconds, and copies back
 # the log and a colour snapshot with detections drawn. Asks for the Pi password once.
 UNIT=${1:-3}; W=${2:-100}; H=${3:-100}; FOCUS=${4:-}; SECS=20

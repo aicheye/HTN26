@@ -1,8 +1,9 @@
 // Top-down robot tracker for QNX. Reads one Camera Module 3, detects ArUco markers (DICT_4X4_50),
 // and streams the robot's pose as one JSON object per line over TCP.
-//   ./tracker <unit> <floor width cm> <floor height cm> [focus step]
-// Without a focus step the lens runs continuous autofocus. With one, focus is fixed at that step,
-// which suits a fixed overhead mount. The log prints the current step once per second.
+//   ./tracker <unit> <floor width cm> <floor height cm> [lens code]
+// QNX's driver for this camera has no autofocus (tried on the Pi: error 22, no manual focus steps).
+// A lens code (0 to 1023, see lens.h) sets the focus motor directly. pi/run-focus.sh finds the best code.
+// Without one the lens stays where it is.
 // Marker 0 is on the robot. Marker 5 is taped flat on the floor against the base of the SO-101 arm.
 // Markers 1 to 4 are taped flat on the floor at the corners of a
 // rectangle: 1 = (0, 0), 2 = (W, 0), 3 = (W, H), 4 = (0, H).
@@ -22,7 +23,6 @@
 // Each JSON object carries the camera pose for that frame, so a pixel found in /frame.jpg can be
 // converted to floor centimetres by the client. See pi/API.md.
 #include <camera/camera_api.h>
-#include <camera/camera_3a.h>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -47,6 +47,8 @@
 #include <mutex>
 #include <string>
 #include <vector>
+
+#include "lens.h"
 
 static const int ROBOT_ID = 0;
 static const int ARM_BASE_ID = 5;
@@ -173,12 +175,12 @@ struct FloorCamera {
 
 int main(int argc, char** argv) {
   if (argc < 4) {
-    std::printf("usage: tracker <unit> <floor width cm> <floor height cm> [focus step]\n");
+    std::printf("usage: tracker <unit> <floor width cm> <floor height cm> [lens code]\n");
     return 1;
   }
   int unit = std::atoi(argv[1]);
   float floorW = std::atof(argv[2]), floorH = std::atof(argv[3]);
-  int focusStep = argc > 4 ? std::atoi(argv[4]) : -1;
+  int lensCode = argc > 4 ? std::atoi(argv[4]) : -1;
   int port = 9000 + unit;
   std::signal(SIGPIPE, SIG_IGN);  // a client that disconnects must not kill the tracker
 
@@ -190,12 +192,7 @@ int main(int argc, char** argv) {
   std::vector<int> clients, eventClients;
 
   camera_handle_t handle = CAMERA_HANDLE_INVALID;
-  // Focus and white balance can only be changed with write access.
-  camera_error_t err = camera_open((camera_unit_t)unit, CAMERA_MODE_RW, &handle);
-  if (err != CAMERA_EOK) {
-    std::printf("unit %d: no write access (error %d), focus cannot be set\n", unit, (int)err);
-    err = camera_open((camera_unit_t)unit, CAMERA_MODE_RO, &handle);
-  }
+  camera_error_t err = camera_open((camera_unit_t)unit, CAMERA_MODE_RO, &handle);
   if (err != CAMERA_EOK) {
     std::printf("unit %d: camera_open failed, error %d\n", unit, (int)err);
     return 3;
@@ -209,23 +206,10 @@ int main(int argc, char** argv) {
   std::printf("unit %d: poses on TCP port %d, frames on http port %d, floor %.0f x %.0f cm\n", unit, port, 8000 + unit,
               floorW, floorH);
 
-  camera_focusmode_t focusModes[CAMERA_FOCUSMODE_NUMFOCUSMODES];
-  int numFocusModes = 0;
-  camera_get_focus_modes(handle, CAMERA_FOCUSMODE_NUMFOCUSMODES, &numFocusModes, focusModes);
-  std::printf("focus modes supported:");
-  for (int i = 0; i < numFocusModes; i++) std::printf(" %d", (int)focusModes[i]);
-  std::printf("\n");
-  if (focusStep >= 0) {
-    err = camera_set_focus_mode(handle, CAMERA_FOCUSMODE_MANUAL);
-    if (err == CAMERA_EOK) err = camera_set_manual_focus_step(handle, focusStep);
-    std::printf("manual focus at step %d: error %d\n", focusStep, (int)err);
-  } else {
-    err = camera_set_focus_mode(handle, CAMERA_FOCUSMODE_CONTINUOUS_AUTO);
-    if (err != CAMERA_EOK) err = camera_set_focus_mode(handle, CAMERA_FOCUSMODE_AUTO);
-    std::printf("autofocus: error %d\n", (int)err);
+  if (lensCode >= 0) {
+    int error = lensSetCode(unit, lensCode);
+    std::printf("lens code %d on %s: %s\n", lensCode, lensBusForUnit(unit), error ? std::strerror(error) : "set");
   }
-  err = camera_set_whitebalance_mode(handle, CAMERA_WHITEBALANCEMODE_AUTO);
-  std::printf("auto white balance: error %d\n", (int)err);
 
   cv::aruco::ArucoDetector detector(cv::aruco::getPredefinedDictionary(cv::aruco::DICT_4X4_50));
   const std::vector<cv::Point3f> floorCorners{{0, 0, 0}, {floorW, 0, 0}, {floorW, floorH, 0}, {0, floorH, 0}};
@@ -366,10 +350,11 @@ int main(int argc, char** argv) {
       fps = framesSinceReport / std::chrono::duration<float>(now - lastReport).count();
       framesSinceReport = 0;
       lastReport = now;
-      int maxStep = -1, step = -1;
-      camera_get_manual_focus_step(handle, &maxStep, &step);
-      std::printf("%.1f fps, focus step %d of %d, camera height %.0f cm, markers [%s], robot %s, arm %s\n", fps, step,
-                  maxStep, cam.valid ? std::abs(cam.C[2]) : -1.0, idList.c_str(), robot.c_str(), arm.c_str());
+      int floorVisible = 0;
+      for (int id : ids) floorVisible += id >= 1 && id <= 4;
+      std::printf("%.1f fps, camera height %.0f cm, floor markers %d of 4%s, markers [%s], robot %s, arm %s\n", fps,
+                  cam.valid ? std::abs(cam.C[2]) : -1.0, floorVisible, layoutLearned ? "" : " (need all 4 held still to learn the layout)",
+                  idList.c_str(), robot.c_str(), arm.c_str());
       std::fflush(stdout);
     }
 
