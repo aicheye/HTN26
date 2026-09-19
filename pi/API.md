@@ -13,6 +13,7 @@ debugging.
 | State, pushed once per frame (about 15 per second) | `http://qnxpi78.local:8003/events` (server-sent events, use `EventSource`) |
 | Every line the tracker prints, as `log` events on the same stream (`source.addEventListener("log", ...)`). A new client first receives the last 40 lines | same `/events` URL |
 | Record frames on the Pi (`pi/record.sh` drives these with one key) | `/record/start?every=2&w=0`, `/record/stop`, `/record/status` on the same port. Saved under `~/recordings/rec-NNN` with `states.jsonl` |
+| The state that belongs to a fetched frame | `X-State` response header of `/frame.jpg` and `/annotated.jpg` |
 | State, once | `http://qnxpi78.local:8003/state.json` |
 | Camera frame | `http://qnxpi78.local:8003/frame.jpg?w=960` (`w` is optional, full size is 2304x1296) |
 | Camera frame with markers drawn | `http://qnxpi78.local:8003/annotated.jpg` |
@@ -89,6 +90,12 @@ with a new frame, but its floor position stays valid.
 Frame conversion: metres = cm / 100, `yaw` = `heading` in radians. `zUp: false` in the tracker state means
 floor markers 1 to 4 run clockwise seen from above. The bridge then mirrors `y` and negates `yaw`, so the
 frontend always gets a right-handed frame with yaw counter-clockwise.
+
+- `POST http://localhost:8080/obstacles`: obstacles in the frontend's own format (metres), replacing the previous
+  list. `vision/scan.py` sends detected objects here as `source: "cv"`, `shape: "rect"`, with extras outside the
+  frontend schema: `label` ("green box"), `color` ("#6ce44e", white-balanced), `points` (the outline), `confidence`,
+  and `textureUrl`. The texture is a PNG cut out of the top view and turned upright: image x runs along the box's
+  `width` (the `yaw` direction), row 0 is the far side along `length`, and it is transparent outside the outline.
 
 `npm test` in `bridge/` checks all of this against a fake tracker and a fake robot.
 

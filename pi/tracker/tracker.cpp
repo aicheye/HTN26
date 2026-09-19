@@ -300,6 +300,8 @@ static void handleHttp(int fd) {
     type = "image/jpeg";
   }
   std::string header = body.empty() ? "HTTP/1.1 404 Not Found\r\n" : "HTTP/1.1 200 OK\r\nContent-Type: " + type + "\r\n";
+  // The state that belongs to exactly this frame, for clients that need the camera pose of the image they fetched.
+  if (type == "image/jpeg") header += "X-State: " + state.substr(0, state.find('\n')) + "\r\nAccess-Control-Expose-Headers: X-State\r\n";
   header += common + "Content-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n";
   sendAll(fd, header.data(), header.size());
   sendAll(fd, body.data(), body.size());

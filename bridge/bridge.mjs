@@ -7,6 +7,8 @@
 // goto is handled by navigator.mjs: path planning around obstacles, walking control, stuck recovery.
 // POST /drive {"mode": "software", "gait": "trot", "trim": 0.1} walks the robot with gait.mjs (poses streamed from
 // here, no reflash needed) in place of the firmware's own gaits. The setting is saved to drive.json.
+// GET / serves controller.html, a manual controller that sends the same /ws commands, so it walks with the drive
+// settings above where the firmware's captive portal always uses the firmware gaits.
 // POST /calibrate measures the robot's real walking and turning with the camera and saves motion.json.
 import fs from "node:fs";
 import http from "node:http";
@@ -31,6 +33,7 @@ const TRACKING_TIMEOUT_MS = 500;
 const STATE_DIR = process.env.BRIDGE_STATE_DIR ? pathToFileURL(process.env.BRIDGE_STATE_DIR + "/") : new URL("./", import.meta.url);
 const MOTION_FILE = new URL("motion.json", STATE_DIR);
 const DRIVE_FILE = new URL("drive.json", STATE_DIR);
+const CONTROLLER_FILE = new URL("./controller.html", import.meta.url);
 const MOVES = ["forward", "backward", "left", "right"];
 
 let tracker = null;        // latest tracker message
@@ -40,7 +43,8 @@ let robotSocket = null;
 let lastRobot = null;      // last known robot pose in the frontend's frame, with lastSeen
 let lastArm = null;
 let cvObstacles = [];      // from the detector, already in metres
-let manualObstacles = [];  // posted directly in metres, for example from the frontend or the simulator
+let manualObstacles = [];  // posted directly in metres: from the frontend, the simulator, or vision/scan.py
+const textures = new Map();  // obstacle id -> PNG bytes. Sent once by vision/scan.py, served at /textures/<id>.png
 let seq = 0;
 
 const savedMotion = fs.existsSync(MOTION_FILE) ? JSON.parse(fs.readFileSync(MOTION_FILE, "utf8")) : {};
@@ -200,7 +204,18 @@ const server = http.createServer((request, response) => {
     response.end(JSON.stringify(body));
   };
   if (request.method === "OPTIONS") return reply(204, {});
+  if (request.url === "/" && request.method === "GET") {
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    return response.end(fs.readFileSync(CONTROLLER_FILE));  // read per request, so edits show on reload
+  }
   if (request.url === "/state") return reply(200, buildState());
+  if (request.url === "/obstacles" && request.method === "GET") return reply(200, manualObstacles);
+  if (request.url.startsWith("/textures/")) {
+    const png = textures.get(decodeURIComponent(request.url.slice("/textures/".length).replace(/\.png$/, "")));
+    if (!png) return reply(404, { error: "no such texture" });
+    response.writeHead(200, { "Content-Type": "image/png", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" });
+    return response.end(png);
+  }
   if (request.url === "/objects" && request.method === "GET") return reply(200, cvObstacles);
   if (request.url === "/drive" && request.method === "GET") return reply(200, drive);
   if (request.url === "/drive" && request.method === "POST") {
@@ -232,7 +247,18 @@ const server = http.createServer((request, response) => {
     request.on("end", () => {
       try {
         // /obstacles takes a list of obstacles in the frontend's own format (metres) and replaces the manual ones.
-        if (request.url === "/obstacles") reply(200, (manualObstacles = JSON.parse(text).map((o, i) => ({ id: `manual-${i + 1}`, source: "manual", yaw: 0, ...o }))));
+        if (request.url === "/obstacles") {
+          // A texture arrives as base64 PNG. It is kept here and replaced by a URL, so the 10 state messages per
+          // second stay small.
+          textures.clear();
+          manualObstacles = JSON.parse(text).map((o, i) => {
+            const { texture, ...rest } = { id: `manual-${i + 1}`, source: "manual", yaw: 0, ...o };
+            if (!texture) return rest;
+            textures.set(rest.id, Buffer.from(texture, "base64"));
+            return { ...rest, textureUrl: `http://localhost:${PORT}/textures/${encodeURIComponent(rest.id)}.png` };
+          });
+          reply(200, manualObstacles);
+        }
         else reply(200, setObjects(JSON.parse(text)));
       } catch (error) { reply(400, { error: error.message }); }
     });
@@ -243,11 +269,16 @@ const server = http.createServer((request, response) => {
 
 const sockets = new WebSocketServer({ server, path: "/ws" });
 sockets.on("connection", (socket) => {
+  let walking = false;  // this client's last command was a move, so the robot is walking on its behalf
   socket.on("message", (data) => {
     let envelope;
     try { envelope = JSON.parse(data); } catch { return; }
-    if (envelope.type === "command") socket.send(JSON.stringify({ type: "ack", data: handleCommand(envelope.data) }));
+    if (envelope.type !== "command") return;
+    walking = MOVES.includes(envelope.data.type);
+    socket.send(JSON.stringify({ type: "ack", data: handleCommand(envelope.data) }));
   });
+  // A controller that drops off the WiFi while a direction is held can never send its stop.
+  socket.on("close", () => { if (walking) move("stop"); });
 });
 
 setInterval(() => {

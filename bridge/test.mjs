@@ -63,6 +63,18 @@ try {
   assert.deepEqual(robotMessages, [{ command: "forward", face: "walk" }, { command: "wave" }, { command: "stop" }]);
   console.log("PASS  commands reach the robot and are acked");
 
+  const page = await fetch("http://127.0.0.1:18080/");
+  assert.match(page.headers.get("content-type"), /text\/html/);
+  assert.match(await page.text(), /Sesame controller/);
+  const dropped = new WebSocket("ws://127.0.0.1:18080/ws");
+  await wait(300);
+  dropped.send(JSON.stringify({ type: "command", data: { id: "d1", ts: 0, robotId: "sesame-1", type: "left" } }));
+  await wait(200);
+  dropped.close();
+  await wait(300);
+  assert.deepEqual(robotMessages.slice(-2), [{ command: "left" }, { command: "stop" }]);
+  console.log("PASS  controller page is served, and a client that disconnects while walking stops the robot");
+
   // A 10 px box centred on the pixel where floor point (48, 30) cm appears.
   const u = 1152 + (1693 * 10) / 130;
   const posted = await (await fetch("http://127.0.0.1:18080/objects", {
