@@ -10,7 +10,7 @@ export const CHASSIS_EDGE = "#000000";
 export const GOAL = "#ef4444";
 export const SHADOW = "rgba(15, 23, 42, 0.3)";
 
-export const TILE_M = 0.3; // floor tile size in meters
+export const TILE_M = 0.1; // floor tile size in meters
 
 /** Proximity at which an obstacle is flagged as a danger, in meters. */
 export const DANGER_M = 0.12;
