@@ -3,6 +3,7 @@
 # Run on the laptop while on the Sesame-Controller WiFi, from the HTN repo root:
 #   bash pi/record.sh [every] [width] [unit]     defaults: every 2nd frame (about 8 per second), full width, unit 3
 # Keys:  SPACE start / stop and save     d download the last recording     q quit
+# To copy every recording at once: bash pi/pull-recordings.sh
 # Frames are saved on the Pi in ~/recordings/rec-NNN as JPEGs, with states.jsonl holding the tracker state
 # for each saved frame. Downloading goes over the robot's slow WiFi: a full-size frame is about 0.6 MB.
 EVERY=${1:-2}; WIDTH=${2:-0}; UNIT=${3:-3}
