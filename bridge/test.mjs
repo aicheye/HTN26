@@ -1,14 +1,19 @@
 // End-to-end test of bridge.mjs against a fake tracker and a fake robot. Run: npm test
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import { WebSocketServer } from "ws";
+import { floorToPixel } from "../pi/client/floor.js";
 
 const camera = { f: 1693, cx: 1152, cy: 648, rvec: [Math.PI, 0, 0], tvec: [-38, 30, 130] };  // straight down from 130 cm over (38, 30)
-let robotPose = { x: 38, y: 30, z: 8, heading: 90, px: [1152, 648] };
+let robotPose = { x: 38, y: 30, z: 11, heading: 90 };
+const startedAt = Date.now();
+const robotWithPixel = () => { const p = floorToPixel(camera, robotPose.x, robotPose.y, 11); return { ...robotPose, px: [p.u, p.v] }; };
 const trackerLine = () => JSON.stringify({
-  t: 1, calibrated: true, frame: [2304, 1296], floor: [76, 60], zUp: true, floorMarkers: 4, fps: 15, markers: [0, 1, 2, 3, 4, 5],
-  robot: robotPose, arm: { x: 70, y: 10, z: 5, heading: 180, px: [0, 0] }, camera,
+  t: Date.now() - startedAt, calibrated: true, frame: [2304, 1296], floor: [76, 60], zUp: true, floorMarkers: 4, fps: 15, markers: [0, 1, 2, 3, 4, 5],
+  robot: robotWithPixel(), arm: { x: 70, y: 10, z: 5, heading: 180, px: [0, 0] }, camera,
 }) + "\n";
 
 const fakeTracker = net.createServer((socket) => {
@@ -24,7 +29,7 @@ fakeRobot.on("connection", (socket) => {
 });
 
 const bridge = spawn("node", ["bridge.mjs"], {
-  env: { ...process.env, PORT: "18080", TRACKER_HOST: "127.0.0.1", TRACKER_PORT: "19003", ROBOT_URL: "ws://127.0.0.1:18081" },
+  env: { ...process.env, BRIDGE_STATE_DIR: fs.mkdtempSync(os.tmpdir() + "/bridge-test-"), PORT: "18080", TRACKER_HOST: "127.0.0.1", TRACKER_PORT: "19003", ROBOT_URL: "ws://127.0.0.1:18081" },
   stdio: "inherit",
 });
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -75,12 +80,12 @@ try {
   await wait(300);
   assert.deepEqual(robotMessages.at(-1), { command: "right" });
   assert.equal(states.at(-1).mission.state, "navigating");
-  robotPose = { ...robotPose, heading: 5 };
-  await wait(300);
+  robotPose = { ...robotPose, heading: 5 };   // a jump: the filter accepts it after 12 consistent detections
+  await wait(1500);
   assert.deepEqual(robotMessages.at(-1), { command: "forward" });
   assert.deepEqual(states.at(-1).goal, { x: 0.6, y: 0.3 });
   robotPose = { ...robotPose, x: 58, y: 30 };
-  await wait(300);
+  await wait(1500);
   assert.deepEqual(robotMessages.at(-1), { command: "stop" });
   assert.equal(states.at(-1).goal, undefined);
   assert.equal(states.at(-1).mission.state, "done");

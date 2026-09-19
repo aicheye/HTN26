@@ -1,6 +1,9 @@
 // Top-down robot tracker for QNX. Reads one Camera Module 3, detects ArUco markers (DICT_4X4_50),
 // and streams the robot's pose as one JSON object per line over TCP.
-//   ./tracker <unit> <floor width cm> <floor height cm> [lens code]
+//   ./tracker <unit> <floor width cm> <floor height cm> [lens code | -] [robot marker height cm]
+// The robot marker height is the distance from the floor to the robot's marker. Without it the height comes from
+// the marker's apparent size, which recordings showed reading several cm low, and that shifts x, y when the camera
+// is not straight above.
 // QNX's driver for this camera has no autofocus (tried on the Pi: error 22, no manual focus steps).
 // A lens code (0 to 1023, see lens.h) sets the focus motor directly. pi/run-focus.sh finds the best code and
 // saves it on the Pi. Without a lens code argument the tracker uses the saved one.
@@ -352,7 +355,8 @@ int main(int argc, char** argv) {
   int unit = std::atoi(argv[1]);
   float floorW = std::atof(argv[2]), floorH = std::atof(argv[3]);
   int lensCode = lensLoadCode(unit);  // saved by the focus tool
-  if (argc > 4) {
+  double robotHeight = argc > 5 ? std::atof(argv[5]) : -1;
+  if (argc > 4 && std::strcmp(argv[4], "-") != 0) {
     char* end = nullptr;
     long value = std::strtol(argv[4], &end, 10);
     if (*end != '\0' || value < 0 || value > 1023) {
@@ -554,13 +558,14 @@ int main(int argc, char** argv) {
 
     // Pose of one tracked marker as JSON: floor centimetres once calibrated, pixels before that.
     // Heading is the direction of the marker's top edge, in degrees. z is height above the floor.
-    auto poseJson = [&](const std::vector<cv::Point2f>& quad) {
+    auto poseJson = [&](const std::vector<cv::Point2f>& quad, double knownHeight) {
       cv::Point2f c = centerOf(quad);
       cv::Point2f front = (quad[0] + quad[1]) / 2;
       char buf[240];
       cv::Vec3d rvec, tvec;
       if (cam.valid && cv::solvePnP(markerCorners, quad, cam.K, noDistortion, rvec, tvec, false, cv::SOLVEPNP_IPPE_SQUARE)) {
         double z = cam.toFloor(tvec)[2];  // from the marker's apparent size
+        if (knownHeight >= 0) z = cam.C[2] > 0 ? knownHeight : -knownHeight;
         cv::Point2f fc = cam.rayAtHeight(c, z), ff = cam.rayAtHeight(front, z);
         float heading = std::atan2(ff.y - fc.y, ff.x - fc.x) * 180 / CV_PI;
         // The floor z axis points away from the camera when markers 1, 2, 3, 4 run clockwise seen from above.
@@ -577,8 +582,8 @@ int main(int argc, char** argv) {
     std::string idList, robot = "null", arm = "null";
     for (size_t i = 0; i < ids.size(); i++) {
       idList += (i ? "," : "") + std::to_string(ids[i]);
-      if (ids[i] == ROBOT_ID) robot = poseJson(corners[i]);
-      if (ids[i] == ARM_BASE_ID) arm = poseJson(corners[i]);
+      if (ids[i] == ROBOT_ID) robot = poseJson(corners[i], robotHeight);
+      if (ids[i] == ARM_BASE_ID) arm = poseJson(corners[i], -1);
     }
 
     int learnedCount = 0;

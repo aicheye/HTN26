@@ -55,11 +55,12 @@ setInterval(() => {
     robot.command = "";
     for (const client of robotClients.clients) client.send(robotState());
   }
-  const pixel = (x, y) => [camera.cx + (camera.f * (x - FLOOR[0] / 2)) / 130, camera.cy - (camera.f * (y - FLOOR[1] / 2)) / 130];
+  // The camera is 130 cm up and the markers sit 11 cm above the floor, so they are 119 cm from it.
+  const pixel = (x, y) => [camera.cx + (camera.f * (x - FLOOR[0] / 2)) / 119, camera.cy - (camera.f * (y - FLOOR[1] / 2)) / 119];
   const line = JSON.stringify({
     t: Date.now() - started, calibrated: true, frame: [2304, 1296], floor: FLOOR, zUp: true, floorMarkers: 4, fps: 15,
     markers: [0, 1, 2, 3, 4, 5],
-    robot: { x: robot.x, y: robot.y, z: 8, heading: robot.heading, px: pixel(robot.x, robot.y) },
+    robot: { x: robot.x, y: robot.y, z: 11, heading: robot.heading, px: pixel(robot.x, robot.y) },
     arm: { x: 70, y: 52, z: 5, heading: -135, px: pixel(70, 52) },
     camera,
   }) + "\n";

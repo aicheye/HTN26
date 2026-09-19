@@ -11,10 +11,12 @@
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import { pathToFileURL } from "node:url";
 import { WebSocketServer } from "ws";
 import { pixelToFloor } from "../pi/client/floor.js";
 import { GaitEngine } from "./gait.mjs";
 import { Navigator } from "./navigator.mjs";
+import { PoseFilter } from "./pose-filter.mjs";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const TRACKER_HOST = process.env.TRACKER_HOST ?? "qnxpi78.local";
@@ -25,8 +27,10 @@ const ROBOT_TAG = 0, ARM_TAG = 5, CORNER_TAGS = [1, 2, 3, 4];
 const ROBOT_FOOTPRINT = { width: 0.105, length: 0.125 };  // metres, from the frontend's sample state
 const ARM_BASE_RADIUS = 0.09;                             // metres, estimate of the SO-101 base
 const TRACKING_TIMEOUT_MS = 500;
-const MOTION_FILE = new URL("./motion.json", import.meta.url);
-const DRIVE_FILE = new URL("./drive.json", import.meta.url);
+// Saved settings live next to this file. The tests point BRIDGE_STATE_DIR at an empty folder.
+const STATE_DIR = process.env.BRIDGE_STATE_DIR ? pathToFileURL(process.env.BRIDGE_STATE_DIR + "/") : new URL("./", import.meta.url);
+const MOTION_FILE = new URL("motion.json", STATE_DIR);
+const DRIVE_FILE = new URL("drive.json", STATE_DIR);
 const MOVES = ["forward", "backward", "left", "right"];
 
 let tracker = null;        // latest tracker message
@@ -52,6 +56,21 @@ function move(command, face = {}) {
 }
 const navigator = new Navigator((command) => move(command), savedMotion);
 
+// The robot pose shown and used for navigation comes from a Kalman filter over the tracker's detections
+// (pose-filter.mjs). markerHeight is the height of the robot's marker above the floor in cm. 11 is an estimate from
+// recordings: measure it with a ruler and set it with POST /drive {"markerHeight": ...}.
+const poseFilter = new PoseFilter(navigator.motion, { markerHeight: drive.markerHeight ?? 11 });
+let filteredAt = null, lastAcceptedAt = 0;
+function onTrackerFrame(frame) {
+  const command = drive.mode === "software" ? gaitEngine.command : MOVES.includes(robotState?.command) ? robotState.command : "";
+  if (filteredAt !== null) poseFilter.predict(Math.min(1, Math.max(0, (frame.t - filteredAt) / 1000)), command, frame.zUp === false);
+  filteredAt = frame.t;
+  const robot = frame.robot;
+  if (!frame.calibrated || !frame.camera || robot?.x === undefined) return;
+  const used = poseFilter.update({ px: robot.px, heading: (robot.heading * Math.PI) / 180, x: robot.x, y: robot.y, camera: frame.camera, floorMarkers: frame.floorMarkers });
+  if (used) lastAcceptedAt = Date.now();
+}
+
 // Tracker frame: centimetres, origin at floor marker 1, x toward marker 2, y toward marker 4.
 // Frontend frame: metres, +y up the screen, yaw counter-clockwise seen from above. When the markers
 // run clockwise seen from above (zUp false), y and the rotation direction are mirrored.
@@ -73,6 +92,7 @@ function connectTracker() {
       try {
         tracker = JSON.parse(line);
         trackerAt = Date.now();
+        onTrackerFrame(tracker);
       } catch {}
     }
   });
@@ -103,15 +123,18 @@ function sendToRobot(message) {
 function buildState() {
   const now = Date.now();
   const fresh = tracker && now - trackerAt < TRACKING_TIMEOUT_MS && tracker.calibrated;
-  if (fresh && tracker.robot) lastRobot = { ...toWorld(tracker.robot.x, tracker.robot.y, tracker.robot.heading), lastSeen: trackerAt };
+  // The filtered pose keeps moving with the commanded gait while the marker is hidden. tracking says whether a
+  // detection was accepted recently, so the frontend can grey the robot out while it is only predicted.
+  const pose = poseFilter.pose;
+  if (pose) lastRobot = { ...toWorld(pose.x, pose.y, (pose.heading * 180) / Math.PI), lastSeen: lastAcceptedAt || (lastRobot?.lastSeen ?? 0), sigma: pose.sigma / 100 };
   if (fresh && tracker.arm) lastArm = toWorld(tracker.arm.x, tracker.arm.y, tracker.arm.heading);
-  const tracking = Boolean(fresh && tracker.robot);
+  const tracking = Boolean(fresh && now - lastAcceptedAt < TRACKING_TIMEOUT_MS);
 
   const command = (drive.mode === "software" && gaitEngine.command) || (robotState?.command ?? "");
   const mode = !tracking ? "lost" : command === "left" || command === "right" ? "turning" : MOVES.includes(command) ? "moving" : "idle";
   const robot = lastRobot && {
     id: "sesame-1", tagId: ROBOT_TAG, x: lastRobot.x, y: lastRobot.y, yaw: lastRobot.yaw, footprint: ROBOT_FOOTPRINT,
-    tracking, lastSeen: lastRobot.lastSeen, mode,
+    tracking, lastSeen: lastRobot.lastSeen, mode, confidence: Math.max(0, Math.min(1, 1 - lastRobot.sigma / 0.05)),
     ...(robotState?.face ? { face: robotState.face } : {}),
     ...(command && !MOVES.includes(command) ? { pose: command } : {}),
   };
@@ -188,6 +211,7 @@ const server = http.createServer((request, response) => {
         gaitEngine.set("stop");
         Object.assign(drive, JSON.parse(text));
         gaitEngine.configure(drive);
+        if (drive.markerHeight !== undefined) { poseFilter.options.markerHeight = drive.markerHeight; poseFilter.state = null; }
         fs.writeFileSync(DRIVE_FILE, JSON.stringify(drive, null, 2) + "\n");
         reply(200, drive);
       } catch (error) { reply(400, { error: error.message }); }
@@ -197,6 +221,7 @@ const server = http.createServer((request, response) => {
   if (request.url === "/calibrate" && request.method === "POST") {
     navigator.calibrate().then((motion) => {
       fs.writeFileSync(MOTION_FILE, JSON.stringify(navigator.motion, null, 2) + "\n");
+      poseFilter.motion = { ...poseFilter.motion, ...navigator.motion };
       reply(200, motion);
     }, (error) => reply(409, { error: error.message }));
     return;
