@@ -35,9 +35,9 @@ from grasp_robot import grasp_segment, tag_pose_at, relative_offsets, place, sol
 from record_demo import Keys
 from replay_demo import Arm, load, FPS
 from sesame_tracker import Tracker, Poller
+from so101_safe import default_port
 from so101_ik import JOINTS, ik
 
-DEFAULT_PORT = "/dev/tty.usbmodem5AE60798501"
 HOLD_S = 0.6            # keep the demo running this long past the grasp mark (the jaws finish closing)
 LIFT_CM = 6.0
 CARRY_PITCHES = (-92.0, -85.0, -78.0, -70.0, -62.0, -55.0)   # tried in order: the least tilt that reaches the carry height wins
@@ -133,7 +133,7 @@ def plan(demo, frame0, obs, args):
     t = seg[-1]["t"]; phases.append(("release", seg))
     seg = cartesian(drop, drop_lifted, args.lift / VERTICAL_CM_PER_S, t, open_value); phases.append(("retract", seg))
 
-    traj, report = [], []
+    traj, report, counts = [], [], []
     t0 = phases[0][1][0]["t"]
     for name, ps in phases:
         tr, failed = solve(ps, grasp["t"] if name == "grip" else -1e9, None if name == "grip" else -1e9, args.squeeze if name == "grip" else 0.0)
@@ -142,12 +142,13 @@ def plan(demo, frame0, obs, args):
         else:
             tr = [(tt + ps[0]["t"] - t0, q, g) for tt, q, g in tr]
         last = ps[-1]
+        counts.append((name, len(tr), len(ps)))
         report.append(f"  {name:8s} {len(tr):3d}/{len(ps):3d} poses  ends at x={100*last['x']:5.1f} y={100*last['y']:5.1f} z={100*last['z']:5.1f} cm  pitch {last['pitch']:5.0f}  jaws {last['jaw_yaw']:6.1f}  gripper {last['gripper']:4.0f}")
         if failed:
             f = failed[0][1]
             return None, "\n".join(report) + f"\n  {name}: {len(failed)} poses unreachable or unsafe, first x={100*f['x']:.1f} y={100*f['y']:.1f} z={100*f['z']:.1f}"
         traj += tr
-    info = {"tag_now": tag_now, "obs": obs, "pick": pick, "drop": drop, "report": report, "seconds": traj[-1][0], "carry_pitch": pitch}
+    info = {"tag_now": tag_now, "obs": obs, "pick": pick, "drop": drop, "report": report, "seconds": traj[-1][0], "carry_pitch": pitch, "phases": counts}
     return traj, info
 
 
@@ -174,7 +175,7 @@ def execute(arm, traj, speed=1.0):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("demo")
-    ap.add_argument("--tracker"); ap.add_argument("--frame", default="arm_frame.json"); ap.add_argument("--port", default=DEFAULT_PORT)
+    ap.add_argument("--tracker"); ap.add_argument("--frame", default="arm_frame.json"); ap.add_argument("--port", default=default_port(), help="arm serial port (default: the USB serial device found, or $SO101_PORT)")
     ap.add_argument("--drop-offset", type=float, nargs=2, metavar=("DX", "DY"), help="cm from the pick point, base frame")
     ap.add_argument("--drop", type=float, nargs=2, metavar=("X", "Y"), help="absolute base-frame cm")
     ap.add_argument("--lift", type=float, default=LIFT_CM); ap.add_argument("--approach", type=float, default=4.0)

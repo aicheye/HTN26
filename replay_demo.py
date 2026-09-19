@@ -19,9 +19,8 @@ import time
 import numpy as np
 
 from so101_ik import JOINTS, check_pose
-from so101_safe import send
+from so101_safe import send, default_port
 
-DEFAULT_PORT = "/dev/tty.usbmodem5AE60798501"
 FPS = 30
 APPROACH_DEG_PER_S = 15.0
 GRIPPER_MIN = 0.0
@@ -58,6 +57,8 @@ def build_trajectory(demo, speed, squeeze):
 
 class Arm:
     def __init__(self, port):
+        if not port:
+            raise SystemExit("no arm found: plug in the SO-101 (a USB serial device), or set SO101_PORT / --port")
         from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
         self.robot = SO101Follower(SO101FollowerConfig(port=port, id="follower"))
         self.robot.connect(calibrate=False)
@@ -84,7 +85,7 @@ class Arm:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("name")
-    ap.add_argument("--port", default=DEFAULT_PORT)
+    ap.add_argument("--port", default=default_port(), help="arm serial port (default: the USB serial device found, or $SO101_PORT)")
     ap.add_argument("--speed", type=float, default=1.0, help="playback speed factor")
     ap.add_argument("--squeeze", type=float, default=8.0, help="gripper units tighter than the demo while grasping")
     ap.add_argument("--dry-run", action="store_true", help="check and print the plan, do not connect")

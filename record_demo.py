@@ -27,15 +27,17 @@ import termios
 import time
 import tty
 
+from so101_safe import default_port
 from so101_ik import JOINTS, fk
 from sesame_tracker import Tracker, Poller
 
-DEFAULT_PORT = "/dev/tty.usbmodem5AE60798501"
 LABELS = {" ": "keyframe", "g": "grasp", "r": "release"}
 
 
 class Arm:
     def __init__(self, port):
+        if not port:
+            raise SystemExit("no arm found: plug in the SO-101 (a USB serial device), or set SO101_PORT / --port")
         from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
         self.robot = SO101Follower(SO101FollowerConfig(port=port, id="follower"))
         self.robot.connect(calibrate=False)
@@ -95,7 +97,7 @@ class Keys:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("name")
-    ap.add_argument("--port", default=DEFAULT_PORT)
+    ap.add_argument("--port", default=default_port(), help="arm serial port (default: the USB serial device found, or $SO101_PORT)")
     ap.add_argument("--tracker", help="Pi tracker host; the quadruped's tag pose is recorded alongside the arm")
     ap.add_argument("--no-tracker", action="store_true", help="record without the tracker (replay only at the recorded spot)")
     ap.add_argument("--rate", type=float, default=20.0, help="samples per second")

@@ -18,7 +18,7 @@ from pathlib import Path
 from lerobot.motors.feetech import FeetechMotorsBus
 from lerobot.motors import Motor, MotorNormMode
 
-DEFAULT_PORT = "/dev/tty.usbmodem5AE60798501"
+from so101_safe import default_port
 NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 CALIB = Path.home() / ".cache/huggingface/lerobot/calibration/robots/so_follower/follower.json"
 
@@ -94,11 +94,13 @@ def test_halfway(bus: FeetechMotorsBus, present: dict[str, int], missing: list[s
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("port", nargs="?", default=DEFAULT_PORT)
+    ap.add_argument("port", nargs="?", default=default_port(), help="arm serial port (default: the USB serial device found)")
     ap.add_argument("--halfway", action="store_true", help="move every joint to its midpoint and verify")
     ap.add_argument("--release", action="store_true", help="disable torque when done (arm goes limp)")
     args = ap.parse_args()
 
+    if not args.port:
+        print("no arm found: plug in the SO-101 (a USB serial device), or give the port"); return 1
     motors = {n: Motor(i, "sts3215", MotorNormMode.RANGE_M100_100) for i, n in enumerate(NAMES, 1)}
     bus = FeetechMotorsBus(port=args.port, motors=motors)
     bus.port_handler.openPort()

@@ -18,15 +18,16 @@ import time
 import numpy as np
 
 from arm_frame import ArmFrame
-from record_demo import Arm, FakeArm, Keys, DEFAULT_PORT
+from record_demo import Arm, FakeArm, Keys
 from sesame_tracker import Tracker
+from so101_safe import default_port
 from so101_ik import fk
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tracker", help="Pi host (default: pi/host or qnxpi78.local)")
-    ap.add_argument("--port", default=DEFAULT_PORT)
+    ap.add_argument("--port", default=default_port(), help="arm serial port (default: the USB serial device found, or $SO101_PORT)")
     ap.add_argument("--out", default="arm_frame.json")
     ap.add_argument("--fake", action="store_true", help="no arm: a fake pose (for trying the flow)")
     args = ap.parse_args()

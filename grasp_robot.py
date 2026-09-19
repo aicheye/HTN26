@@ -27,9 +27,9 @@ import numpy as np
 from arm_frame import ArmFrame, rot
 from replay_demo import Arm, load, FPS
 from sesame_tracker import Tracker
+from so101_safe import default_port
 from so101_ik import JOINTS, ik, fk
 
-DEFAULT_PORT = "/dev/tty.usbmodem5AE60798501"
 GRIPPER_MIN = 0.0
 PRE_APPROACH_CM = 5.0        # start this far above the first transformed pose
 
@@ -96,7 +96,7 @@ def main():
     ap.add_argument("demo")
     ap.add_argument("--tracker", help="Pi host (default: pi/host, else qnxpi78.local)")
     ap.add_argument("--frame", default="arm_frame.json")
-    ap.add_argument("--port", default=DEFAULT_PORT)
+    ap.add_argument("--port", default=default_port(), help="arm serial port (default: the USB serial device found, or $SO101_PORT)")
     ap.add_argument("--approach", type=float, default=4.0, help="seconds of the demo before the grasp mark to replay")
     ap.add_argument("--retract", type=float, default=2.0, help="seconds after the release mark to replay")
     ap.add_argument("--speed", type=float, default=1.0)

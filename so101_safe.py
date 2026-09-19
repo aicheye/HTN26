@@ -9,7 +9,22 @@ or link is out of range and UnsafePoseError is raised, because driving the arm p
 that position risks breaking the robot. Actions use LeRobot's "<joint>.pos" keys in
 degrees (SO101FollowerConfig.use_degrees=True), where 0 is the calibrated midpoint.
 """
+import glob
+import os
+
 from so101_ik import JOINTS, UnsafePoseError, check_pose
+
+
+def default_port():
+    """The arm's serial port: $SO101_PORT if set, else the one USB serial device present. The SO-101's
+    adapter shows up as /dev/tty.usbmodem* on macOS and /dev/ttyACM* on Linux, and its number changes."""
+    if os.environ.get("SO101_PORT"):
+        return os.environ["SO101_PORT"]
+    for pattern in ("/dev/tty.usbmodem*", "/dev/ttyACM*", "/dev/ttyUSB*"):
+        found = sorted(glob.glob(pattern))
+        if found:
+            return found[0]
+    return None
 
 
 def send(robot, action):
