@@ -9,7 +9,7 @@
 EVERY=${1:-2}; WIDTH=${2:-0}; UNIT=${3:-3}
 HOST=qnxpi78.local
 BASE="http://$HOST:$((8000 + UNIT))"
-SHARE="-o ControlMaster=auto -o ControlPath=/tmp/htn-pi-%C -o ControlPersist=120"
+. "$(dirname "$0")/common.sh"
 field() { sed -n "s/.*\"$1\":\"\{0,1\}\([^\",}]*\).*/\1/p"; }
 
 status=$(curl -s -m 3 "$BASE/record/status")
@@ -40,8 +40,8 @@ while true; do
       d)
         if [ -z "$last" ]; then echo "nothing recorded yet"; continue; fi
         mkdir -p recordings
-        echo "downloading $last to recordings/ (asks for the Pi password)"
-        scp -r $SHARE "qnxuser@$HOST:$last" recordings/ && echo "downloaded to recordings/$(basename "$last")" ;;
+        echo "downloading $last to recordings/"
+        scp -r $SSH_OPTS "$PI:$last" recordings/ && echo "downloaded to recordings/$(basename "$last")" ;;
       q)
         [ "$recording" = "true" ] && curl -s -m 15 "$BASE/record/stop" >/dev/null && echo && echo "recording stopped and saved in $last"
         exit 0 ;;
