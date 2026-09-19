@@ -83,6 +83,38 @@ export type Obstacle = {
   confidence?: number; // 0 to 1, detector score
 };
 
+/**
+ * SO-101 6-DOF arm (waist, shoulder, elbow, wrist pitch, wrist roll, gripper),
+ * bolted to one edge of the table. Angles are radians, matching the joint
+ * conventions in the arm's URDF, so real hardware can publish these directly.
+ */
+export type ArmJointAngles = {
+  waist: number; // joint 1, yaw about the vertical pedestal axis
+  shoulder: number; // joint 2, pitch
+  elbow: number; // joint 3, pitch
+  wristPitch: number; // joint 4
+  wristRoll: number; // joint 5
+  gripper: number; // joint 6, 0 = closed .. ~1.2 = open
+};
+
+export type ArmMode =
+  | "idle"
+  | "reaching"
+  | "grasping"
+  | "lifting"
+  | "carrying"
+  | "placing"
+  | "releasing"
+  | "returning";
+
+export type ArmState = {
+  /** Fixed mount pose in arena coordinates; which table edge it's clamped to. */
+  mount: { x: number; y: number; yaw: number; side: "north" | "south" | "east" | "west" };
+  joints: ArmJointAngles;
+  mode: ArmMode;
+  targetRobotId?: string; // robot currently being assisted, if any
+};
+
 export type WorldState = {
   schemaVersion: 1;
   seq: number; // increments every frame
@@ -100,6 +132,7 @@ export type WorldState = {
   obstacles: Obstacle[];
   goal?: Point; // where the user clicked
   path?: Point[]; // planner output
+  arm?: ArmState; // pick-and-place assist arm, if the rig has one
 };
 
 export type CommandType =

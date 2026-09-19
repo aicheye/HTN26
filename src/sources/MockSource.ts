@@ -1,6 +1,16 @@
 import { cloneSampleWorldState } from "../data/sampleWorldState";
+import {
+  ARM_ASSIST_HEIGHT_M,
+  ARM_CARRY_LIFT_M,
+  ARM_REST_POSE,
+  clampArmJoint,
+  isWithinArmReach,
+  solveArmIK,
+} from "../components/mapShared";
 import type {
   Ack,
+  ArmJointAngles,
+  ArmMode,
   Command,
   Obstacle,
   Point,
@@ -14,6 +24,30 @@ const LINEAR_SPEED = 0.45; // m/s at speed = 1
 const ANGULAR_SPEED = 1.6; // rad/s at speed = 1
 const GOTO_ARRIVE_RADIUS = 0.06; // meters
 const POSE_DURATION_MS = 2_500; // one-shot animations block movement while playing
+
+/** How long the robot has to be blocked by a too-tall obstacle before the arm helps. */
+const ARM_STUCK_TRIGGER_MS = 900;
+
+/** Duration of each phase in the pick-and-carry sequence, ms. */
+const ARM_PHASE_MS: Partial<Record<ArmMode, number>> = {
+  reaching: 900,
+  grasping: 500,
+  lifting: 500,
+  carrying: 1400,
+  placing: 500,
+  releasing: 400,
+  returning: 900,
+};
+
+const ARM_NEXT: Partial<Record<ArmMode, ArmMode>> = {
+  reaching: "grasping",
+  grasping: "lifting",
+  lifting: "carrying",
+  carrying: "placing",
+  placing: "releasing",
+  releasing: "returning",
+  returning: "idle",
+};
 
 type ActiveCommand = {
   command: Command;
@@ -29,6 +63,13 @@ export class MockSource implements StateSource {
   private poseUntil = 0;
   private timer: number | null = null;
   private lastTick = 0;
+
+  // pick-and-carry assist state
+  private stuckMs = 0;
+  private armElapsed = 0;
+  private armFrom: Point | null = null;
+  private armTo: Point | null = null;
+  private lastBlockedBy: Obstacle | null = null;
 
   private stateSubs = new Set<(s: WorldState) => void>();
   private ackSubs = new Set<(a: Ack) => void>();
@@ -140,8 +181,20 @@ export class MockSource implements StateSource {
       robot.face = "idle";
     }
 
+    const arm = this.state.arm;
+    const assisting = !!arm && arm.mode !== "idle";
+
     let mode: Robot["mode"] = "idle";
-    if (cmd && !posing) mode = this.step(cmd, dt);
+    if (assisting) {
+      mode = "idle";
+    } else if (cmd && !posing) {
+      mode = this.step(cmd, dt);
+      this.trackStuck(cmd, dt);
+    } else {
+      this.stuckMs = 0;
+    }
+
+    if (arm) this.advanceArm(arm, dt);
 
     // Reported pose = truth + a slowly drifting estimate error, not per-frame hash.
     this.bias.x = this.bias.x * 0.94 + gauss(0.004) * 0.06;
@@ -213,13 +266,127 @@ export class MockSource implements StateSource {
 
     const cx = clamp(nx, margin, width - margin);
     const cy = clamp(ny, margin, length - margin);
-    if (this.blocked(cx, cy, margin)) return;
+    const blocker = this.findBlocker(cx, cy, margin);
+    this.lastBlockedBy = blocker ?? null;
+    if (blocker) return;
     this.truth.x = cx;
     this.truth.y = cy;
   }
 
-  private blocked(x: number, y: number, radius: number): boolean {
-    return this.state.obstacles.some((o) => circleHitsObstacle(x, y, radius, o));
+  private findBlocker(x: number, y: number, radius: number): Obstacle | undefined {
+    return this.state.obstacles.find((o) => circleHitsObstacle(x, y, radius, o));
+  }
+
+  /** Counts how long a drive command has been blocked by an obstacle too tall to climb. */
+  private trackStuck(cmd: Command, dt: number) {
+    const blocker = this.lastBlockedBy;
+    const drivingInto = cmd.type === "forward" || cmd.type === "backward" || cmd.type === "goto";
+    if (!blocker || !drivingInto || (blocker.height ?? 0) <= ARM_ASSIST_HEIGHT_M) {
+      this.stuckMs = 0;
+      return;
+    }
+    this.stuckMs += dt * 1000;
+    if (this.stuckMs >= ARM_STUCK_TRIGGER_MS && this.state.arm?.mode === "idle") {
+      this.triggerArmAssist(blocker);
+    }
+  }
+
+  /** Kicks off the reach -> grasp -> lift -> carry -> place -> release -> return sequence. */
+  private triggerArmAssist(obstacle: Obstacle) {
+    const arm = this.state.arm;
+    if (!arm) return;
+    const robot = this.robot();
+    this.stuckMs = 0;
+
+    // the arm only serves its own working envelope; outside it the robot is on its own
+    if (!isWithinArmReach(arm.mount, this.truth)) return;
+
+    const dir = normalize({ x: obstacle.x - this.truth.x, y: obstacle.y - this.truth.y });
+    const margin = Math.max(robot.footprint.width, robot.footprint.length) / 2;
+    const { width, length } = this.state.arena;
+    let clearance = obstacleRadius(obstacle) + margin + 0.09;
+    let px = obstacle.x + dir.x * clearance;
+    let py = obstacle.y + dir.y * clearance;
+    // keep pushing past the obstacle until the landing spot is actually clear
+    for (let i = 0; i < 12 && this.findBlocker(px, py, margin); i++) {
+      clearance += 0.06;
+      px = obstacle.x + dir.x * clearance;
+      py = obstacle.y + dir.y * clearance;
+    }
+    px = clamp(px, margin, width - margin);
+    py = clamp(py, margin, length - margin);
+    // the drop-off has to be somewhere the gripper can actually reach
+    if (!isWithinArmReach(arm.mount, { x: px, y: py })) return;
+
+    this.armFrom = { x: this.truth.x, y: this.truth.y };
+    this.armTo = { x: px, y: py };
+    this.armElapsed = 0;
+    arm.mode = "reaching";
+    arm.targetRobotId = robot.id;
+  }
+
+  /** Advances the arm's phase timer, joint pose, and (while carrying) the robot's position. */
+  private advanceArm(arm: NonNullable<WorldState["arm"]>, dt: number) {
+    if (arm.mode === "idle") return;
+    this.armElapsed += dt * 1000;
+
+    if (arm.mode === "carrying" && this.armFrom && this.armTo) {
+      const dur = ARM_PHASE_MS.carrying ?? 1;
+      const t = easeInOut(clamp(this.armElapsed / dur, 0, 1));
+      this.truth.x = lerp(this.armFrom.x, this.armTo.x, t);
+      this.truth.y = lerp(this.armFrom.y, this.armTo.y, t);
+    }
+
+    const target = this.armTargetJoints(arm);
+    const k = 1 - Math.exp(-8 * dt);
+    (Object.keys(target) as (keyof ArmJointAngles)[]).forEach((key) => {
+      const next = arm.joints[key] + (target[key] - arm.joints[key]) * k;
+      arm.joints[key] = clampArmJoint(key, next);
+    });
+
+    const dur = ARM_PHASE_MS[arm.mode];
+    if (dur !== undefined && this.armElapsed >= dur) {
+      this.armElapsed = 0;
+      const next = ARM_NEXT[arm.mode] ?? "idle";
+      arm.mode = next;
+      if (next === "idle") {
+        arm.targetRobotId = undefined;
+        this.armFrom = null;
+        this.armTo = null;
+        // the rescue is done; drop the command and goal so it doesn't march back in
+        this.active = null;
+        this.state.goal = undefined;
+        this.state.path = undefined;
+      }
+    }
+  }
+
+  /** IK target for the current phase: where the gripper should be, and how open. */
+  private armTargetJoints(arm: NonNullable<WorldState["arm"]>): ArmJointAngles {
+    if (arm.mode === "returning") {
+      return { ...ARM_REST_POSE, waist: 0 };
+    }
+
+    const point =
+      arm.mode === "carrying"
+        ? { x: this.truth.x, y: this.truth.y }
+        : arm.mode === "placing" || arm.mode === "releasing"
+          ? (this.armTo ?? this.truth)
+          : (this.armFrom ?? this.truth);
+
+    const z =
+      arm.mode === "lifting" || arm.mode === "carrying"
+        ? ARM_CARRY_LIFT_M
+        : arm.mode === "placing"
+          ? ARM_CARRY_LIFT_M *
+            (1 - easeInOut(clamp(this.armElapsed / (ARM_PHASE_MS.placing ?? 1), 0, 1)))
+          : 0;
+
+    const ik = solveArmIK(arm.mount, point, z);
+    const gripper =
+      arm.mode === "reaching" || arm.mode === "releasing" ? 0.6 : arm.mode === "idle" ? 0.1 : 0;
+
+    return { ...ik, wristRoll: 0, gripper };
   }
 }
 
@@ -267,4 +434,26 @@ function gauss(sigma: number) {
   const u = 1 - Math.random();
   const v = Math.random();
   return sigma * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
+function easeInOut(t: number) {
+  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+}
+
+function normalize(v: Point): Point {
+  const len = Math.hypot(v.x, v.y);
+  return len > 1e-6 ? { x: v.x / len, y: v.y / len } : { x: 1, y: 0 };
+}
+
+/** Rough bounding radius used to place the robot clear of the obstacle it got stuck on. */
+function obstacleRadius(o: Obstacle): number {
+  if (o.shape === "circle") return o.radius ?? 0.1;
+  if (o.shape === "polygon" && o.points?.length) {
+    return Math.max(...o.points.map((p) => Math.hypot(p.x - o.x, p.y - o.y)));
+  }
+  return Math.hypot((o.width ?? 0.2) / 2, (o.length ?? 0.2) / 2);
 }

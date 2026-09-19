@@ -110,5 +110,17 @@
       "height": 0.17,
       "confidence": 0.69
     }
-  ]
+  ],
+  "arm": {
+    "mount": { "x": 1.2, "y": 0, "yaw": 1.5707963267948966, "side": "south" },
+    "joints": {
+      "waist": 0,
+      "shoulder": -1.3,
+      "elbow": -1.74533,
+      "wristPitch": -1.65806,
+      "wristRoll": 0,
+      "gripper": 0.05
+    },
+    "mode": "idle"
+  }
 }

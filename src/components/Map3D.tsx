@@ -3,6 +3,7 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber"
 import { Line, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import type { MapProps } from "./MapProps";
+import { ArmModel } from "./ArmModel";
 import {
   CHASSIS,
   CHASSIS_EDGE,
@@ -16,6 +17,8 @@ import {
   OBSTACLE,
   OBSTACLE_DANGER,
   TILE_M,
+  ARM_CARRY_LIFT_M,
+  isCarried,
   isDanger,
   isWalking,
   robotDims,
@@ -87,8 +90,9 @@ export function Map3D({
           )}
           {state.goal && <GoalPin x={state.goal.x} y={state.goal.y} />}
           {state.robots.map((r) => (
-            <RobotModel key={r.id} robot={r} />
+            <RobotModel key={r.id} robot={r} carried={isCarried(state.arm, r.id)} />
           ))}
+          {state.arm && <ArmModel arm={state.arm} />}
         </group>
 
         <OrbitControls
@@ -410,7 +414,7 @@ function GoalPin({ x, y }: { x: number; y: number }) {
   );
 }
 
-function RobotModel({ robot }: { robot: Robot }) {
+function RobotModel({ robot, carried = false }: { robot: Robot; carried?: boolean }) {
   const group = useRef<THREE.Group>(null);
   const legs = useRef<(THREE.Mesh | null)[]>([]);
   const dims = robotDims(robot.footprint);
@@ -420,7 +424,7 @@ function RobotModel({ robot }: { robot: Robot }) {
   // detections arrive ~20 Hz; damp toward them so the model glides
   const target = useRef({ x: robot.x, y: robot.y, yaw: robot.yaw });
   target.current = { x: robot.x, y: robot.y, yaw: robot.yaw };
-  const walking = isWalking(robot.mode);
+  const walking = isWalking(robot.mode) && !carried;
 
   useFrame((clockState, dt) => {
     const g = group.current;
@@ -445,7 +449,11 @@ function RobotModel({ robot }: { robot: Robot }) {
   });
 
   return (
-    <group ref={group} position={[robot.x, robot.y, 0]} rotation={[0, 0, robot.yaw]}>
+    <group
+      ref={group}
+      position={[robot.x, robot.y, carried ? ARM_CARRY_LIFT_M : 0]}
+      rotation={[0, 0, robot.yaw]}
+    >
       {LEG_LAYOUT.map(([front, left], i) => (
         <mesh
           key={i}

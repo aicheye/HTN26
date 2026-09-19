@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { MapProps } from "./MapProps";
 import {
+  ARM_COLOR,
   CHASSIS,
   CHASSIS_EDGE,
   DANGER_M,
@@ -121,6 +122,7 @@ function render(
   drawPath(ctx, state.path, v);
   if (state.goal) drawGoal(ctx, state.goal, v);
   state.robots.forEach((r) => drawRobot(ctx, r, v));
+  if (state.arm) drawArm(ctx, state, v);
   if (!compact) drawScaleBar(ctx, state, v);
 }
 
@@ -333,6 +335,54 @@ function drawGoal(ctx: CanvasRenderingContext2D, goal: Point, v: View) {
   ctx.lineWidth = 1.5;
   ctx.stroke();
   ctx.restore();
+}
+
+/** Top-down view of the pick-and-place arm: a bracket at its table-edge mount. */
+function drawArm(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {
+  const arm = state.arm;
+  if (!arm) return;
+  const [x, y] = toPx(arm.mount, v);
+  const active = arm.mode !== "idle";
+  const r = 10;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(-arm.mount.yaw);
+  ctx.fillStyle = ARM_COLOR;
+  ctx.strokeStyle = "#7c2d12";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-r, -r * 0.8);
+  ctx.lineTo(r * 0.6, -r * 0.8);
+  ctx.lineTo(r * 1.3, 0);
+  ctx.lineTo(r * 0.6, r * 0.8);
+  ctx.lineTo(-r, r * 0.8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+
+  if (active) {
+    const target = state.robots.find((rob) => rob.id === arm.targetRobotId);
+    if (target) {
+      const [tx, ty] = toPx(target, v);
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = "rgba(249, 115, 22, 0.7)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.save();
+    ctx.font = "600 9px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#c2410c";
+    ctx.fillText(arm.mode.toUpperCase(), x, y + (arm.mount.side === "north" ? 18 : -14));
+    ctx.restore();
+  }
 }
 
 /**
