@@ -68,11 +68,12 @@ export class GaitEngine {
   // sendServos: (servos object) => void. Call onRobotState() with every state message from the robot.
   constructor(sendServos, options = {}) {
     this.sendServos = sendServos;
-    this.options = { gait: "trot", trim: 0, frameDelay: 100, confirmTimeout: 600, subtrim: {}, ...options };
+    this.options = { gait: "trot", trim: 0, frameDelay: 100, confirmTimeout: 300, subtrim: {}, ...options };
     this.command = "";
     this.steer = 0;
     this.servos = {};
     this.running = false;
+    this.timings = [];  // per frame: how long the robot took to confirm the pose, for diagnosing pauses
   }
 
   configure(options) {
@@ -113,7 +114,7 @@ export class GaitEngine {
   // The firmware applies only the newest pose it has received, so sending without waiting would drop frames.
   async sendFrame(target) {
     this.sendServos(target);
-    const deadline = Date.now() + this.options.confirmTimeout;
+    const sentAt = Date.now(), deadline = sentAt + this.options.confirmTimeout;
     const reached = () => Object.entries(target).every(([servo, angle]) => this.servos[servo] === angle);
     while (!reached() && Date.now() < deadline) {
       await new Promise((resolve) => {
@@ -121,6 +122,8 @@ export class GaitEngine {
         setTimeout(resolve, 50);
       });
     }
+    this.timings.push({ at: sentAt, servos: Object.keys(target).length, confirmMs: Date.now() - sentAt, timedOut: !reached() });
+    if (this.timings.length > 2000) this.timings.shift();
     await new Promise((resolve) => setTimeout(resolve, this.options.frameDelay));
   }
 
