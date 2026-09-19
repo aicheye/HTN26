@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "seq": 0,
+  "timestamp": 1758240000000,
+  "arena": {
+    "width": 2.4,
+    "length": 1.8,
+    "cornerTagIds": [0, 1, 2, 3]
+  },
+  "calibration": { "ok": true, "reprojectionError": 0.42 },
+  "robots": [
+    {
+      "id": "sesame-1",
+      "tagId": 7,
+      "x": 0.48,
+      "y": 0.36,
+      "yaw": 0.7853981633974483,
+      "footprint": { "width": 0.105, "length": 0.125 },
+      "tracking": true,
+      "lastSeen": 1758240000000,
+      "confidence": 0.94,
+      "mode": "idle",
+      "face": "idle"
+    }
+  ],
+  "obstacles": [
+    {
+      "id": "obstacle-1",
+      "source": "tag",
+      "shape": "rect",
+      "x": 1.2,
+      "y": 0.9,
+      "yaw": 0.35,
+      "width": 0.3,
+      "length": 0.18,
+      "height": 0.12,
+      "tagId": 12,
+      "confidence": 0.99
+    },
+    {
+      "id": "obstacle-2",
+      "source": "cv",
+      "shape": "polygon",
+      "x": 1.872,
+      "y": 0.552,
+      "yaw": 0,
+      "height": 0.2,
+      "confidence": 0.88,
+      "points": [
+        { "x": 1.758, "y": 0.474 },
+        { "x": 1.83, "y": 0.426 },
+        { "x": 1.926, "y": 0.432 },
+        { "x": 1.998, "y": 0.498 },
+        { "x": 2.01, "y": 0.594 },
+        { "x": 1.962, "y": 0.666 },
+        { "x": 1.866, "y": 0.69 },
+        { "x": 1.782, "y": 0.648 },
+        { "x": 1.74, "y": 0.564 }
+      ]
+    },
+    {
+      "id": "obstacle-3",
+      "source": "cv",
+      "shape": "polygon",
+      "x": 0.72,
+      "y": 1.38,
+      "yaw": 0,
+      "height": 0.1,
+      "confidence": 0.74,
+      "points": [
+        { "x": 0.474, "y": 1.344 },
+        { "x": 0.684, "y": 1.314 },
+        { "x": 0.888, "y": 1.332 },
+        { "x": 0.966, "y": 1.38 },
+        { "x": 0.93, "y": 1.434 },
+        { "x": 0.708, "y": 1.452 },
+        { "x": 0.516, "y": 1.428 },
+        { "x": 0.456, "y": 1.392 }
+      ]
+    },
+    {
+      "id": "obstacle-4",
+      "source": "cv",
+      "shape": "polygon",
+      "x": 1.956,
+      "y": 1.44,
+      "yaw": 0,
+      "height": 0.27,
+      "confidence": 0.81,
+      "points": [
+        { "x": 1.818, "y": 1.314 },
+        { "x": 2.064, "y": 1.29 },
+        { "x": 2.112, "y": 1.374 },
+        { "x": 2.076, "y": 1.44 },
+        { "x": 2.1, "y": 1.548 },
+        { "x": 2.016, "y": 1.596 },
+        { "x": 1.908, "y": 1.566 },
+        { "x": 1.89, "y": 1.47 },
+        { "x": 1.812, "y": 1.416 }
+      ]
+    },
+    {
+      "id": "obstacle-5",
+      "source": "cv",
+      "shape": "circle",
+      "x": 0.432,
+      "y": 1.116,
+      "yaw": 0,
+      "radius": 0.102,
+      "height": 0.17,
+      "confidence": 0.69
+    }
+  ]
+}
