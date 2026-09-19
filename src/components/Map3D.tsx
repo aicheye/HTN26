@@ -156,7 +156,6 @@ function CameraRig({
     | null;
   const span = Math.max(arena.width, arena.length);
   const desired = useRef<{ pos: THREE.Vector3; target: THREE.Vector3 } | null>(null);
-  const followOffset = useRef<THREE.Vector3 | null>(null);
 
   useEffect(() => {
     if (!controls) return;
@@ -183,7 +182,6 @@ function CameraRig({
     } else {
       desired.current = null;
     }
-    followOffset.current = null;
   }, [view, arena.width, arena.length, span]);
 
   useFrame((_, dt) => {
@@ -192,14 +190,11 @@ function CameraRig({
 
     if (view === "follow" && robot) {
       const target = new THREE.Vector3(robot.x, 0, -robot.y);
-      if (!followOffset.current) {
-        followOffset.current = camera.position.clone().sub(controls.target);
-        if (followOffset.current.length() > span) {
-          followOffset.current.setLength(Math.min(span * 0.6, 1.2));
-        }
-      }
+      // read the offset fresh each frame so orbiting and zooming still work
+      const offset = camera.position.clone().sub(controls.target);
+      if (offset.length() > span * 1.5) offset.setLength(span * 0.6);
       controls.target.lerp(target, k);
-      camera.position.lerp(target.clone().add(followOffset.current), k);
+      camera.position.copy(controls.target).add(offset);
     } else if (desired.current) {
       camera.position.lerp(desired.current.pos, k);
       controls.target.lerp(desired.current.target, k);
@@ -491,13 +486,14 @@ function Eyes({
 
       {[-1, 1].map((side) => (
         <group key={side} position={[0.0018, side * bodyW * 0.2, 0]}>
-          <mesh scale={[0.3, 1, 1]}>
+          <mesh scale={[0.45, 1, 1]}>
             <sphereGeometry args={[r, 20, 20]} />
             <meshStandardMaterial color={white} roughness={0.3} />
           </mesh>
-          <mesh position={[r * 0.1, 0, r * 0.08]} scale={[0.3, 1, 1]}>
-            <sphereGeometry args={[r * 0.42, 16, 16]} />
-            <meshStandardMaterial color={pupil} roughness={0.25} />
+          {/* pushed past the dome surface so the pupil reads from the front and above */}
+          <mesh position={[r * 0.3, 0, r * 0.06]} scale={[0.45, 1, 1]}>
+            <sphereGeometry args={[r * 0.5, 16, 16]} />
+            <meshStandardMaterial color={pupil} roughness={0.2} />
           </mesh>
         </group>
       ))}
