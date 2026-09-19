@@ -6,7 +6,7 @@ import {
 import type { ArmState } from "../types/world";
 
 /** Vertical gap so the forearm reads as a separate beam above the upper arm when folded flat. */
-const FOREARM_LIFT = 0.0138;
+const FOREARM_LIFT = 0.02;
 
 /** Simple rescue arm model using the same Z-up coordinates as the arena. */
 export function ArmModel({ arm }: { arm: ArmState }) {
@@ -40,14 +40,14 @@ export function ArmModel({ arm }: { arm: ArmState }) {
             <group position={[L.upperArm, 0, 0]} rotation={[0, elbow, 0]}>
               <Servo />
               <mesh position={[0, 0, FOREARM_LIFT / 2]} castShadow>
-                <boxGeometry args={[0.0124, 0.0124, FOREARM_LIFT + 0.0124]} />
+                <boxGeometry args={[0.0198, 0.0198, FOREARM_LIFT + 0.0198]} />
                 <meshStandardMaterial color={ARM_JOINT_COLOR} roughness={0.45} metalness={0.25} />
               </mesh>
               <group position={[0, 0, FOREARM_LIFT]}>
-                <Link length={L.lowerArm} width={0.011} />
+                <Link length={L.lowerArm} width={0.018} />
                 <group position={[L.lowerArm, 0, 0]} rotation={[0, wristPitch, 0]}>
                   <Servo small />
-                  <Link length={L.wrist} width={0.0088} />
+                  <Link length={L.wrist} width={0.014} />
                   <group position={[L.wrist, 0, 0]} rotation={[wristRoll, 0, 0]}>
                     <Servo small />
                     <Gripper length={L.gripper} jaw={L.jaw} openAngle={gripper} />
@@ -64,18 +64,18 @@ export function ArmModel({ arm }: { arm: ArmState }) {
 
 /** Simplified parallel upper link. */
 function ParallelUpperArm({ length }: { length: number }) {
-  const gap = 0.0166;
+  const gap = 0.022;
   return (
     <group>
       <group position={[0, -gap / 2, 0]}>
-        <Link length={length} width={0.0072} />
+        <Link length={length} width={0.0115} />
       </group>
       <group position={[0, gap / 2, 0]}>
-        <Link length={length} width={0.0072} />
+        <Link length={length} width={0.0115} />
       </group>
       {[0, length].map((x) => (
         <mesh key={x} position={[x, 0, 0]} rotation={[0, 0, Math.PI / 2]} castShadow>
-          <cylinderGeometry args={[0.0033, 0.0033, gap, 10]} />
+          <cylinderGeometry args={[0.0053, 0.0053, gap, 10]} />
           <meshStandardMaterial color={ARM_COLOR} roughness={0.55} />
         </mesh>
       ))}
@@ -84,8 +84,8 @@ function ParallelUpperArm({ length }: { length: number }) {
 }
 
 function Servo({ small = false }: { small?: boolean }) {
-  const r = small ? 0.0077 : 0.0105;
-  const axle = small ? 0.0171 : 0.0215;
+  const r = small ? 0.0123 : 0.0168;
+  const axle = small ? 0.0274 : 0.0344;
   return (
     <group>
       <mesh castShadow>
@@ -118,16 +118,16 @@ function Gripper({
   jaw: number;
   openAngle: number;
 }) {
-  const spread = 0.0022 + Math.max(0, openAngle) * 0.0097;
+  const spread = 0.0035 + Math.max(0, openAngle) * 0.0155;
   return (
     <group>
       <mesh position={[length / 2, 0, 0]} rotation={[0, 0, -Math.PI / 2]} castShadow>
-        <cylinderGeometry args={[0.0047, 0.0047, length, 12]} />
+        <cylinderGeometry args={[0.0075, 0.0075, length, 12]} />
         <meshStandardMaterial color={ARM_JOINT_COLOR} roughness={0.5} metalness={0.2} />
       </mesh>
       {[-1, 1].map((side) => (
         <mesh key={side} position={[length + jaw / 2, side * spread, 0]} castShadow>
-          <boxGeometry args={[jaw, 0.0028, 0.0066]} />
+          <boxGeometry args={[jaw, 0.0045, 0.0106]} />
           <meshStandardMaterial color={ARM_COLOR} roughness={0.55} />
         </mesh>
       ))}

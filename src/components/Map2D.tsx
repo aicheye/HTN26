@@ -166,8 +166,8 @@ function drawFloor(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {
 function drawCornerTags(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {
   if (!state.arena.cornerTagIds?.length) return;
   const { width, length } = state.arena;
-  const inset = 0.14;
-  const size = 0.1 * v.scale;
+  const inset = 0.08;
+  const size = 0.06 * v.scale;
   const corners: Point[] = [
     { x: inset, y: inset },
     { x: width - inset, y: inset },

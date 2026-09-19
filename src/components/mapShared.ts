@@ -74,7 +74,7 @@ export function distanceTo(o: Obstacle, p: Point): number {
  * the arm's own URDF (onshape-to-robot export), not scaled up for the arena.
  */
 export const ARM_LINK = {
-  pedestal: 0.085, // base mounting plate + motor stack height, up to the waist axis
+  pedestal: 0.06, // base mounting plate + motor stack height, up to the waist axis
   plate: 0.01, // mounting plate thickness
   shoulderRise: 0.065, // waist axis -> shoulder pitch axis (the vertical riser)
   upperArm: 0.116, // shoulder joint -> elbow joint
