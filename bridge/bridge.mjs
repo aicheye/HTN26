@@ -21,7 +21,9 @@ import { Navigator } from "./navigator.mjs";
 import { PoseFilter } from "./pose-filter.mjs";
 
 const PORT = Number(process.env.PORT ?? 8080);
-const TRACKER_HOST = process.env.TRACKER_HOST ?? "qnxpi78.local";
+// The Pi's name does not resolve on every network. pi/host can hold its address (see pi/common.sh).
+const HOST_FILE = new URL("../pi/host", import.meta.url);
+const TRACKER_HOST = process.env.TRACKER_HOST ?? (fs.existsSync(HOST_FILE) ? fs.readFileSync(HOST_FILE, "utf8").trim() : "qnxpi78.local");
 const TRACKER_PORT = Number(process.env.TRACKER_PORT ?? 9003);
 const ROBOT_URL = process.env.ROBOT_URL ?? "ws://192.168.4.1:81";
 

@@ -26,7 +26,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 import detect  # noqa: E402
 from sam import Sam  # noqa: E402
 
-TRACKER = os.environ.get("TRACKER_URL", "http://qnxpi78.local:8003")
+HOST_FILE = Path(__file__).parent.parent / "pi" / "host"  # optional: the Pi's address when its name does not resolve
+PI_HOST = HOST_FILE.read_text().strip() if HOST_FILE.exists() else "qnxpi78.local"
+TRACKER = os.environ.get("TRACKER_URL", f"http://{PI_HOST}:8003")
 BRIDGE = os.environ.get("BRIDGE_URL", "http://localhost:8080")
 FRAMES, FETCH_INTERVAL_S, FETCH_WIDTH = 12, 0.5, 1152
 SAME_OBJECT_CM = 4  # an object found within this distance of one from the previous scan keeps its id

@@ -11,7 +11,8 @@ python3 -m http.server $PORT --bind 127.0.0.1 --directory pi/client >/dev/null 2
 SERVER=$!
 trap 'kill $SERVER 2>/dev/null' EXIT INT TERM
 
-URL="http://localhost:$PORT/demo.html?unit=$UNIT"
+. pi/common.sh
+URL="http://localhost:$PORT/demo.html?unit=$UNIT&host=$PI_HOST"
 echo "live view: $URL"
 (xdg-open "$URL" >/dev/null 2>&1 || open "$URL" >/dev/null 2>&1) &
 

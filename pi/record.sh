@@ -7,9 +7,9 @@
 # Frames are saved on the Pi in ~/recordings/rec-NNN as JPEGs, with states.jsonl holding the tracker state
 # for each saved frame. Downloading goes over the robot's slow WiFi: a full-size frame is about 0.6 MB.
 EVERY=${1:-2}; WIDTH=${2:-0}; UNIT=${3:-3}
-HOST=qnxpi78.local
-BASE="http://$HOST:$((8000 + UNIT))"
 . "$(dirname "$0")/common.sh"
+HOST=$PI_HOST
+BASE="http://$HOST:$((8000 + UNIT))"
 field() { sed -n "s/.*\"$1\":\"\{0,1\}\([^\",}]*\).*/\1/p"; }
 
 status=$(curl -s -m 3 "$BASE/record/status")

@@ -15,3 +15,4 @@ bridge/drive.json
 bridge/walk-log.json
 recordings/
 vision/models/
+pi/host
