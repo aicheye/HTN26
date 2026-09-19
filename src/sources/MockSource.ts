@@ -2,6 +2,7 @@ import { cloneSampleWorldState } from "../data/sampleWorldState";
 import {
   ARM_ASSIST_HEIGHT_M,
   ARM_CARRY_LIFT_M,
+  ARM_MAX_REACH,
   ARM_REST_POSE,
   ARM_TRANSIT_HEIGHT_M,
   armTipPosition,
@@ -307,28 +308,60 @@ export class MockSource implements StateSource {
     // the arm only serves its own working envelope; outside it the robot is on its own
     if (!isWithinArmReach(arm.mount, this.truth)) return;
 
-    const dir = normalize({ x: obstacle.x - this.truth.x, y: obstacle.y - this.truth.y });
     const margin = Math.max(robot.footprint.width, robot.footprint.length) / 2;
     const { width, length } = this.state.arena;
-    const base = obstacleRadius(obstacle) + margin + 0.09;
+    const goal = this.state.goal;
 
-    const forward = dir;
-    const side = { x: -dir.y, y: dir.x };
-    const directions = [forward, side, { x: -side.x, y: -side.y }, { x: -forward.x, y: -forward.y }];
     let drop: Point | null = null;
-    for (const testDir of directions) {
-      for (let i = 0; i < 14; i++) {
-        const c = base + i * 0.05;
+
+    // Get as close to the robot's actual destination as the arm can physically
+    // reach: walk the mount->goal ray in from the goal (or from the edge of the
+    // reach envelope, if the goal itself is farther out) toward the mount,
+    // stopping at the first clear spot. That's exactly the goal when it's
+    // reachable and unobstructed, otherwise the nearest point to it that isn't.
+    if (goal) {
+      const dx = goal.x - arm.mount.x;
+      const dy = goal.y - arm.mount.y;
+      const goalDist = Math.hypot(dx, dy);
+      const dir = goalDist > 1e-6 ? { x: dx / goalDist, y: dy / goalDist } : { x: 1, y: 0 };
+      const startR = Math.min(goalDist, ARM_MAX_REACH - margin - 0.01);
+      for (let r = startR; r > margin; r -= 0.02) {
         const p = {
-          x: clamp(obstacle.x + testDir.x * c, margin, width - margin),
-          y: clamp(obstacle.y + testDir.y * c, margin, length - margin),
+          x: clamp(arm.mount.x + dir.x * r, margin, width - margin),
+          y: clamp(arm.mount.y + dir.y * r, margin, length - margin),
         };
-        if (!this.findBlocker(p.x, p.y, margin) && isWithinArmReach(arm.mount, p)) {
+        if (!this.findBlocker(p.x, p.y, margin)) {
           drop = p;
           break;
         }
       }
-      if (drop) break;
+    }
+
+    if (!drop) {
+      // no goal (plain drive command), or the whole reach envelope toward the
+      // goal was blocked: fall back to searching outward from the obstacle,
+      // biased toward the goal (or the direction the robot was already
+      // heading) so the drop still continues the trip where it can
+      const toward = goal
+        ? normalize({ x: goal.x - obstacle.x, y: goal.y - obstacle.y })
+        : normalize({ x: obstacle.x - this.truth.x, y: obstacle.y - this.truth.y });
+      const side = { x: -toward.y, y: toward.x };
+      const directions = [toward, side, { x: -side.x, y: -side.y }, { x: -toward.x, y: -toward.y }];
+      const base = obstacleRadius(obstacle) + margin + 0.09;
+      for (const testDir of directions) {
+        for (let i = 0; i < 14; i++) {
+          const c = base + i * 0.05;
+          const p = {
+            x: clamp(obstacle.x + testDir.x * c, margin, width - margin),
+            y: clamp(obstacle.y + testDir.y * c, margin, length - margin),
+          };
+          if (!this.findBlocker(p.x, p.y, margin) && isWithinArmReach(arm.mount, p)) {
+            drop = p;
+            break;
+          }
+        }
+        if (drop) break;
+      }
     }
     if (!drop) return;
 
