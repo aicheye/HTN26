@@ -38,7 +38,16 @@ class Arm:
         from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
         self.robot = SO101Follower(SO101FollowerConfig(port=port, id="follower"))
         self.robot.connect(calibrate=False)
-        self.robot.bus.disable_torque()
+        # The Feetech bus occasionally drops a status packet right after connect; retry the torque-off.
+        for attempt in range(5):
+            try:
+                self.robot.bus.disable_torque(num_retry=3)
+                break
+            except ConnectionError as e:
+                if attempt == 4:
+                    raise
+                print(f"bus glitch ({str(e).split('[')[0].strip()}), retrying torque-off")
+                time.sleep(0.2)
 
     def read(self):
         return {k[:-4]: float(v) for k, v in self.robot.get_observation().items() if k.endswith(".pos")}
