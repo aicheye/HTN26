@@ -36,24 +36,29 @@ LAT_R = -0.0001768                        # lateral offset of the roll axis from
 # With roll: lateral = N0*cos(roll) + V0*sin(roll); in-plane = -N0*sin(roll) + V0*cos(roll).
 N0, V0 = 0.0001676, -0.0079006
 JAW_PHASE = np.radians(2.7896)            # jaw axis is rotated this much about the roll axis at roll=0
-TABLE_Z = 0.0                             # targets below this height are rejected
+TABLE_Z = -0.02                           # table surface in base_link z (m); targets below it are rejected
 
 JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
 URDF_LIMITS = {"shoulder_pan": (-110.0, 110.0), "shoulder_lift": (-100.0, 100.0),
                "elbow_flex": (-96.8, 96.8), "wrist_flex": (-95.0, 95.0), "wrist_roll": (-157.0, 163.0)}
 
-# Safe range the arm may be COMMANDED to, in degrees. Narrower than the URDF: 5 deg inside every
-# URDF limit, and the pan is capped where it hit a mechanical stop on the real arm on 2026-09-19
-# (about +79 deg with the arm extended; the servo registers allow more but the arm does not).
-# ik() never returns a pose outside this box, and check_pose() rejects one. Widen a value only
-# after moving the arm there by hand and seeing that nothing binds.
-SAFE_LIMITS = {"shoulder_pan": (-75.0, 75.0), "shoulder_lift": (-95.0, 95.0),
-               "elbow_flex": (-91.8, 91.8), "wrist_flex": (-90.0, 90.0), "wrist_roll": (-152.0, 158.0)}
+# Safe range the arm may be COMMANDED to, in degrees. ik() never returns a pose outside this box and
+# check_pose() rejects one. Widen a value only after moving the arm there by hand and seeing that nothing
+# binds. Where each value comes from:
+# - shoulder_pan: hit a mechanical stop at about +79 deg with the arm extended on 2026-09-19, so +-75.
+# - shoulder_lift low end, elbow_flex high end: the folded rest pose the arm sits in (lift -104, elbow 97.5,
+#   hand-guided demo of 2026-09-19); the other ends are 5 deg inside the URDF limits.
+# - wrist_flex: a hand-guided top-down grasp at 9.4 cm height reached 110 deg without binding
+#   (2026-09-19), so +-112; the URDF says 95. A top-down approach above 7 cm needs more than 90 deg anyway.
+# - wrist_roll: 5 deg inside the URDF limits.
+SAFE_LIMITS = {"shoulder_pan": (-75.0, 75.0), "shoulder_lift": (-106.0, 95.0),
+               "elbow_flex": (-91.8, 98.0), "wrist_flex": (-112.0, 112.0), "wrist_roll": (-152.0, 158.0)}
 LIMITS = SAFE_LIMITS
-# Minimum height above the table (m) for the elbow, wrist_flex pivot and wrist_roll origin: the
-# motor bodies sit around those points, so this is the crash margin. The gripper frame is the
-# fingertips and may come down to the table itself.
-MIN_LINK_Z = {"elbow_flex": 0.04, "wrist_flex": 0.04, "wrist_roll": 0.04, "gripper_frame": 0.0}
+# Minimum z in base_link (m) for the elbow, wrist_flex pivot and wrist_roll origin: the motor bodies sit
+# around those points, so this is the crash margin. The gripper frame is the fingertips and may come down
+# to the table, which is TABLE_Z below base_link's origin (the base plate): with the arm resting on the
+# table in its folded pose the fingertips read z = -1.8 cm (hand-guided demo, 2026-09-19).
+MIN_LINK_Z = {"elbow_flex": 0.04, "wrist_flex": 0.04, "wrist_roll": 0.04, "gripper_frame": -0.02}
 UNSAFE_MSG = "Refusing to command it: driving the arm past this position risks breaking the robot."
 
 

@@ -119,7 +119,7 @@ def test_unreachable():
         "too far (60 cm out)": (0.60, 0.0, 0.05, 0),
         "too far sideways": (0.0, 0.55, 0.05, 0),
         "too close (on the pan axis)": (0.0388, 0.0, 0.05, 0),
-        "below the table": (0.25, 0.0, -0.02, 0),
+        "below the table": (0.25, 0.0, -0.05, 0),
         "too high for top-down": (0.25, 0.0, 0.45, 0),
     }
     bad = [name for name, args in cases.items() if ik(*args) is not None]

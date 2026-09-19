@@ -33,9 +33,18 @@ def load(name):
         return json.load(f)
 
 
+LEAD_IN_DEG = 2.0       # samples before the arm first moves this far from its start pose are skipped
+
+
 def build_trajectory(demo, speed, squeeze):
-    """(t, joints dict, gripper) per sample, with the squeeze applied after the grasp mark and until release."""
+    """(t, joints dict, gripper) per sample, with the squeeze applied after the grasp mark and until release.
+    The static lead-in (the arm sitting still before the person starts moving it) is dropped."""
     marks = sorted(demo["keyframes"], key=lambda k: k["t"])
+    first = demo["samples"][0]["joints"]
+    start = next((i for i, s in enumerate(demo["samples"]) if max(abs(s["joints"][j] - first[j]) for j in JOINTS) > LEAD_IN_DEG), 0)
+    start = max(0, start - 5)
+    demo = {**demo, "samples": demo["samples"][start:]}
+    t_off = demo["samples"][0]["t"]
     grasp_t = next((k["t"] for k in marks if k["label"] == "grasp"), None)
     release_t = next((k["t"] for k in marks if k["label"] == "release" and (grasp_t is None or k["t"] > grasp_t)), None)
     traj = []
@@ -43,8 +52,8 @@ def build_trajectory(demo, speed, squeeze):
         g = s["gripper"]
         if grasp_t is not None and s["t"] >= grasp_t and (release_t is None or s["t"] < release_t):
             g = max(GRIPPER_MIN, g - squeeze)
-        traj.append((s["t"] / speed, {j: float(s["joints"][j]) for j in JOINTS}, float(g)))
-    return traj, grasp_t, release_t
+        traj.append(((s["t"] - t_off) / speed, {j: float(s["joints"][j]) for j in JOINTS}, float(g)))
+    return traj, grasp_t, release_t, t_off
 
 
 class Arm:
@@ -83,7 +92,9 @@ def main():
     args = ap.parse_args()
 
     demo = load(args.name)
-    traj, grasp_t, release_t = build_trajectory(demo, args.speed, args.squeeze)
+    traj, grasp_t, release_t, t_off = build_trajectory(demo, args.speed, args.squeeze)
+    if t_off:
+        print(f"skipping the first {t_off:.1f} s: the arm had not moved yet")
     bad = [(i, msg) for i, (_, q, _) in enumerate(traj) if (msg := check_pose(q))]
     print(f"demo '{demo['name']}': {len(traj)} samples, {traj[-1][0]:.1f} s at speed {args.speed}, "
           f"grasp at {grasp_t}, release at {release_t}, squeeze {args.squeeze}")
