@@ -87,4 +87,7 @@ frontend always gets a right-handed frame with yaw counter-clockwise.
 
 `npm test` in `bridge/` checks all of this against a fake tracker and a fake robot.
 
+`npm run sim` in `bridge/` starts the bridge against a simulated tracker and robot, so the frontend can be
+developed without hardware. The simulated robot walks and turns in response to commands, including `goto`.
+
 `pi/client/demo.html` is a debugging page that reads the tracker directly: camera view with overlays, plus a top-down map.
