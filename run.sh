@@ -1,0 +1,47 @@
+#!/bin/sh
+# The one command for the arm demo. Sets itself up on first use.
+#
+#   sh run.sh check              what is ready and what is missing, with the fix for each
+#   sh run.sh test               the whole pick-and-place chain offline (no arm, no Pi)
+#   sh run.sh trackers           start both Pi cameras' trackers (fetches Sean's Pi files if this checkout lacks them)
+#   sh run.sh calibrate          fingertips on the Sesame's tag at 3 placements -> arm_frame.json
+#   sh run.sh record NAME        guide the grasp by hand with the tracker running -> demos/NAME.json
+#   sh run.sh pickup NAME        p = plan, space = find the Sesame, grip, lift, carry, set down, release
+#   sh run.sh replay NAME        play a demo back where it was recorded
+#   sh run.sh arm                ping the motors;  sh run.sh arm --halfway  moves to the midpoint and back
+#   sh run.sh setup              (re)build the Python environment
+# Anything after the subcommand is passed on (for example: sh run.sh pickup grip2 --drop-offset 0 10).
+set -e
+cd "$(dirname "$0")"
+PY=.venv/bin/python
+cmd=${1:-help}; [ $# -gt 0 ] && shift
+
+ensure_env() {
+  if [ ! -x "$PY" ] || ! "$PY" -c "import lerobot, scipy, placo" 2>/dev/null; then
+    echo "setting up the Python environment first (about a minute)"
+    sh setup.sh
+  fi
+}
+
+ensure_pi() {
+  if [ ! -f pi/common.sh ] || [ ! -d pi/tracker ]; then
+    echo "this checkout has no pi/ (Sean's tracker and Pi scripts). Fetching them from origin/devel/sean into the working tree."
+    echo "They are his code: do not commit them from here."
+    git fetch -q origin devel/sean
+    git restore --source=origin/devel/sean -- pi
+  fi
+}
+
+case "$cmd" in
+  setup)     sh setup.sh ;;
+  check)     ensure_env; "$PY" preflight.py "$@" ;;
+  test)      ensure_env; "$PY" test_pickup.py "$@" && "$PY" -m pytest -q test_so101_ik.py "$@" ;;
+  trackers)  ensure_pi; sh start_trackers.sh "$@" ;;
+  calibrate) ensure_env; "$PY" calibrate_arm_frame.py "$@" ;;
+  record)    ensure_env; "$PY" record_demo.py "$@" ;;
+  pickup)    ensure_env; "$PY" sesame_pickup.py "$@" ;;
+  grasp)     ensure_env; "$PY" grasp_robot.py "$@" ;;
+  replay)    ensure_env; "$PY" replay_demo.py "$@" ;;
+  arm)       ensure_env; "$PY" check_arm.py "$@" ;;
+  *)         sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

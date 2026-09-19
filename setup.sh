@@ -7,7 +7,12 @@
 set -e
 cd "$(dirname "$0")"
 LEROBOT_COMMIT=5aa74557f84c54d4b458f8b9643c5aa2982acfed
-command -v uv >/dev/null || { echo "uv is needed: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
+if ! command -v uv >/dev/null; then
+  echo "installing uv (the Python environment tool) into ~/.local/bin"
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  command -v uv >/dev/null || { echo "uv did not install; see https://docs.astral.sh/uv/"; exit 1; }
+fi
 [ -d .venv ] || uv venv --python 3.12 .venv
 if [ ! -d lerobot/.git ]; then
   git clone -q https://github.com/huggingface/lerobot.git lerobot
