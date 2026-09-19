@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import { WebSocketServer } from "ws";
 
-const FLOOR = [76, 60];            // cm, same rectangle as the real arena
+const FLOOR = [63.5, 63.5];        // cm, same square as the real arena
 const WALK_CM_PER_S = 5;           // guesses, the real robot has not been measured
 const TURN_DEG_PER_S = 30;
 const POSE_SECONDS = 2;
@@ -15,7 +15,7 @@ const MOVES = ["forward", "backward", "left", "right"];
 // Camera looking straight down from 130 cm over the middle of the floor.
 const camera = { f: 1693, cx: 1152, cy: 648, rvec: [Math.PI, 0, 0], tvec: [-FLOOR[0] / 2, FLOOR[1] / 2, 130] };
 
-const robot = { x: 20, y: 15, heading: 0, command: "", face: "idle", poseUntil: 0 };
+const robot = { x: 17, y: 16, heading: 0, command: "", face: "idle", poseUntil: 0 };
 const started = Date.now();
 
 const robotClients = new WebSocketServer({ port: 8081 });
@@ -60,7 +60,7 @@ setInterval(() => {
     t: Date.now() - started, calibrated: true, frame: [2304, 1296], floor: FLOOR, zUp: true, floorMarkers: 4, fps: 15,
     markers: [0, 1, 2, 3, 4, 5],
     robot: { x: robot.x, y: robot.y, z: 8, heading: robot.heading, px: pixel(robot.x, robot.y) },
-    arm: { x: 70, y: 52, z: 5, heading: -135, px: pixel(70, 52) },
+    arm: { x: 58.5, y: 55, z: 5, heading: -135, px: pixel(58.5, 55) },
     camera,
   }) + "\n";
   for (const socket of trackerClients) socket.write(line);

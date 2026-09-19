@@ -186,9 +186,16 @@ function drawCornerTags(ctx: CanvasRenderingContext2D, state: WorldState, v: Vie
   ctx.restore();
 }
 
+/** Picks a round-number bar length that comfortably fits inside the arena. */
+function niceScaleMeters(maxMeters: number): number {
+  const candidates = [1, 0.5, 0.25, 0.2, 0.1, 0.05, 0.02, 0.01];
+  return candidates.find((c) => c <= maxMeters) ?? candidates[candidates.length - 1];
+}
+
 /** Scale reference, drawn inside the arena so it reads as part of the map. */
 function drawScaleBar(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {
-  const len = v.scale; // one meter
+  const meters = niceScaleMeters(Math.min(state.arena.width, state.arena.length) / 3);
+  const len = meters * v.scale;
   const [left, bottom] = toPx({ x: state.arena.width / 2, y: 0 }, v);
   const x = left - len / 2;
   const y = bottom - 18;
@@ -208,7 +215,8 @@ function drawScaleBar(ctx: CanvasRenderingContext2D, state: WorldState, v: View)
   ctx.fillStyle = "rgba(15, 23, 42, 0.5)";
   ctx.font = "10px ui-monospace, monospace";
   ctx.textAlign = "center";
-  ctx.fillText("1 m", x + len / 2, y - 8);
+  const label = meters >= 1 ? `${meters} m` : `${Math.round(meters * 100)} cm`;
+  ctx.fillText(label, x + len / 2, y - 8);
   ctx.restore();
 }
 
