@@ -1,6 +1,6 @@
 """Record a grasp demonstration on the SO-101 by guiding the arm by hand.
 
-Run: .venv/bin/python record_demo.py NAME [--port PORT] [--robot X Y HEADING] [--rate 20] [--fake]
+Run: .venv/bin/python record_demo.py NAME [--port PORT] [--tracker HOST] [--rate 20] [--fake]
 
 Torque is switched off so the arm goes limp: hold it before it drops. Then move the gripper through the
 grasp by hand. The script samples all six joints continuously and stores each sample with the gripper
@@ -14,9 +14,9 @@ Keys while recording:
   q       finish and save to demos/NAME.json
   x       abort without saving
 
---robot X Y HEADING records where the quadruped was during the demo, in metres and degrees in the arm's
-base_link frame, so the replay can shift the grasp to wherever the quadruped is. Leave it out when the
-quadruped is always placed on the same mark.
+--tracker HOST (default: pi/host, else qnxpi78.local) reads the Pi tracker while recording and stores the
+quadruped's tag pose with every sample and mark. grasp_robot.py needs that to move the grasp to wherever
+the quadruped is later. Without a tracker the demo only replays exactly where it was recorded.
 """
 import argparse
 import json
@@ -28,6 +28,7 @@ import time
 import tty
 
 from so101_ik import JOINTS, fk
+from sesame_tracker import Tracker, Poller
 
 DEFAULT_PORT = "/dev/tty.usbmodem5AE60798501"
 LABELS = {" ": "keyframe", "g": "grasp", "r": "release"}
@@ -95,7 +96,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("name")
     ap.add_argument("--port", default=DEFAULT_PORT)
-    ap.add_argument("--robot", type=float, nargs=3, metavar=("X", "Y", "HEADING"), help="quadruped pose during the demo (m, m, deg)")
+    ap.add_argument("--tracker", help="Pi tracker host; the quadruped's tag pose is recorded alongside the arm")
+    ap.add_argument("--no-tracker", action="store_true", help="record without the tracker (replay only at the recorded spot)")
     ap.add_argument("--rate", type=float, default=20.0, help="samples per second")
     ap.add_argument("--fake", action="store_true", help="no hardware, a moving fake pose")
     args = ap.parse_args()
@@ -105,6 +107,16 @@ def main():
     if os.path.exists(path):
         print(f"{path} exists, pick another name")
         return 1
+    poller = None
+    if not args.no_tracker:
+        tracker = Tracker(args.tracker)
+        first = tracker.observe()
+        if first is None:
+            print(f"no tracker sees the quadruped at {tracker.host} (units {tracker.units}).")
+            print("Start it with sh pi/live.sh and check the tag is in view, or record with --no-tracker.")
+            return 1
+        print(f"tracker: camera {first['unit']} sees the quadruped at ({first['robot']['x']:.1f}, {first['robot']['y']:.1f}) cm heading {first['robot']['heading']:.0f}")
+        poller = Poller(tracker, period=0.3)
     arm = FakeArm() if args.fake else Arm(args.port)
     print("torque is OFF, the arm is limp. Guide the gripper by hand.")
     print("space = keyframe   g = grasp   r = release   q = finish and save   x = abort")
@@ -117,8 +129,11 @@ def main():
             t = time.time() - t0
             joints = arm.read()
             pose = fk(joints)
+            obs = poller.get() if poller else None
             samples.append({"t": round(t, 3), "joints": {j: round(joints[j], 2) for j in JOINTS}, "gripper": round(joints["gripper"], 1),
-                            "pose": {k: round(v, 4) for k, v in pose.items()}})
+                            "pose": {k: round(v, 4) for k, v in pose.items()},
+                            "robot_floor": None if obs is None else {**{k: round(v, 2) for k, v in obs["robot"].items()}, "unit": obs["unit"]},
+                            "arm_floor": None if obs is None or not obs["arm"] else {k: round(v, 2) for k, v in obs["arm"].items()}})
             key = keys.get()
             if key in LABELS:
                 keyframes.append({"t": round(t, 3), "index": len(samples) - 1, "label": LABELS[key]})
@@ -142,7 +157,7 @@ def main():
         return 1
     demo = {"name": args.name, "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S"), "rate_hz": args.rate,
             "frame": "base_link, metres and degrees; pose = gripper_frame_link via so101_ik.fk",
-            "robot": None if args.robot is None else {"x": args.robot[0], "y": args.robot[1], "heading": args.robot[2]},
+            "tracker": None if poller is None else {"host": tracker.host, "zUp": (poller.get() or first)["zUp"]},
             "samples": samples, "keyframes": keyframes}
     with open(path, "w") as f:
         json.dump(demo, f, indent=1)
