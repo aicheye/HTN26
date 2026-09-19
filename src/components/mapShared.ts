@@ -70,18 +70,18 @@ export function distanceTo(o: Obstacle, p: Point): number {
 }
 
 /**
- * SO-101 arm geometry, in meters. Proportions follow the URDF joint chain while
- * staying compact enough that the rescue demo does not dominate the arena.
+ * SO-101 arm geometry, in meters - joint-to-joint distances taken directly from
+ * the arm's own URDF (onshape-to-robot export), not scaled up for the arena.
  */
 export const ARM_LINK = {
-  pedestal: 0.09, // base plate + motor stack height, up to the waist axis
-  plate: 0.018, // mounting plate thickness
-  shoulderRise: 0.1, // waist axis -> shoulder pitch axis (the vertical riser)
-  upperArm: 0.42, // shoulder joint -> elbow joint
-  lowerArm: 0.4, // elbow joint -> wrist joint
-  wrist: 0.09, // wrist joint -> gripper roll joint
+  pedestal: 0.085, // base mounting plate + motor stack height, up to the waist axis
+  plate: 0.01, // mounting plate thickness
+  shoulderRise: 0.065, // waist axis -> shoulder pitch axis (the vertical riser)
+  upperArm: 0.116, // shoulder joint -> elbow joint
+  lowerArm: 0.135, // elbow joint -> wrist joint
+  wrist: 0.064, // wrist joint -> gripper roll joint
   gripper: 0.07, // gripper body, roll joint -> jaw pivot
-  jaw: 0.045, // finger length, visual only
+  jaw: 0.028, // finger length, visual only
 };
 
 /** Height of the shoulder pitch axis above the floor. */
