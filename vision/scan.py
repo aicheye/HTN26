@@ -33,7 +33,6 @@ BRIDGE = os.environ.get("BRIDGE_URL", "http://localhost:8080")
 FRAMES, FETCH_INTERVAL_S, FETCH_WIDTH = 12, 0.3, 960
 WATCH_WINDOW_S = 4  # watch mode only uses frames this recent, so a moved object wins the vote within seconds
 SAME_OBJECT_CM = 4  # an object found within this distance of one from the previous scan keeps its id
-PAGE_FILE = Path(__file__).parent.parent / "pi" / "client" / "objects.json"  # read by the live page (pi/client/demo.html)
 
 
 def fetch_frame():
@@ -105,21 +104,10 @@ def to_obstacles(objects, masks, picture, view, state, previous):
             "yaw": round(-obj["yaw"] if mirrored else obj["yaw"], 4),
             "width": round(obj["width"] / 100, 4), "length": round(obj["length"] / 100, 4),
             "points": [to_world(x, y) for x, y in obj["outline"]],
-            "color": "#%02x%02x%02x" % tuple(obj["colour"]), "confidence": obj["score"],
+            "color": "#%02x%02x%02x" % tuple(obj["colour"]), "colorSource": "camera", "confidence": obj["score"],
             "texture": texture_of(obj, picture, mask, view, mirrored),
         })
     return obstacles
-
-
-def publish_for_page(objects, obstacles, seconds, frame_count):
-    """Writes the result where the live page polls for it. Positions stay in the tracker's floor frame (cm), which is
-    what the page works in. The file is replaced in one step, so the page never reads half of it."""
-    page_objects = [{**{k: obj[k] for k in ("x", "y", "width", "length", "yaw", "corners", "outline", "colour")},
-                     "id": obstacle["id"], "label": obstacle["label"], "texture": obstacle["texture"]}
-                    for obj, obstacle in zip(objects, obstacles)]
-    temporary = PAGE_FILE.with_suffix(".tmp")
-    temporary.write_text(json.dumps({"updated": time.time(), "seconds": round(seconds, 1), "frames": frame_count, "objects": page_objects}))
-    temporary.replace(PAGE_FILE)
 
 
 def send(obstacles):
@@ -131,7 +119,6 @@ def scan(frames, sam, previous, memory=None):
     started = time.time()
     objects, picture, _, view, masks = detect.detect(frames, tuple(frames[0][1]["floor"]), sam, return_masks=True, memory=memory)
     obstacles = to_obstacles(objects, masks, picture, view, frames[0][1], previous)
-    publish_for_page(objects, obstacles, time.time() - started, len(frames))
     print(f"{len(obstacles)} objects from {len(frames)} frames in {time.time() - started:.1f} s: " + ", ".join(o["id"] for o in obstacles))
     return obstacles, detect.draw(objects, picture, view)
 
@@ -170,7 +157,7 @@ def watch(sam):
         try:
             send(previous)
         except OSError:
-            pass  # the bridge is optional, the live page reads pi/client/objects.json
+            print("  bridge not reachable, objects not shown. Start it with sh pi/live.sh or npm --prefix bridge start", flush=True)
 
 
 def main():

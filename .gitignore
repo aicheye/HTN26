@@ -27,3 +27,5 @@ pi/client/objects.tmp
 vision/scan.log
 vision/.venv/
 objects.jpg
+bridge/bridge.log
+ui.log
