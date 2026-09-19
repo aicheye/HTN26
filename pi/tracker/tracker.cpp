@@ -76,7 +76,7 @@ static const int DETECT_SHRINK = 2;
 static std::mutex frameMutex;
 static std::condition_variable frameReady;
 static cv::Mat latestGray;
-static cv::Mat latestUv;  // NV12 chroma plane, kept only for the colour snapshot
+static cv::Mat latestUv;  // NV12 colour plane of the same frame, for saved and served images
 
 // Runs on a camera library thread. The buffer is only valid during the call, so copy it out.
 static void onFrame(camera_handle_t, camera_buffer_t* buf, void*) {
@@ -425,7 +425,11 @@ int main(int argc, char** argv) {
       }
       gray = latestGray;
       uv = latestUv;
+      // Let go of both buffers. copyTo() into a Mat that already has the right size reuses its memory, so a
+      // buffer still held here would be overwritten by the next camera frame while this frame is in use.
+      // Only the brightness plane was released before, and saved images got the colour of a later frame.
       latestGray = cv::Mat();
+      latestUv = cv::Mat();
     }
     auto now = std::chrono::steady_clock::now();
 
