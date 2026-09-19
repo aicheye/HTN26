@@ -324,6 +324,12 @@ def detect(frames, floor=(63, 63), sam=None, return_masks=False):
             continue
         (cx, cy), (w, h), _ = cv2.minAreaRect(contour)
         corners = view.to_floor(cv2.boxPoints(cv2.minAreaRect(contour)))
+        # Corners must run counter-clockwise in floor coordinates, so that "length" points 90 degrees to the left of
+        # "width" and the texture is not mirrored. OpenCV returns them clockwise as seen on screen.
+        a, b = corners[1] - corners[0], corners[2] - corners[1]
+        turn = a[0] * b[1] - a[1] * b[0]
+        if turn < 0:
+            corners = corners[::-1].copy()
         edge = corners[1] - corners[0]
         x, y = view.to_floor([(cx, cy)])[0]
         inside = np.zeros(clean.shape, np.uint8)

@@ -41,7 +41,7 @@
 </div>
 <div id="log"></div>
 <script type="module">
-import { pixelToFloor } from "./floor.js";
+import { floorToPixel } from "./floor.js";
 const query = new URLSearchParams(location.search);
 const base = `http://${query.get("host") ?? "qnxpi78.local"}:${8000 + Number(query.get("unit") ?? 3)}`;
 const viewWidth = document.getElementById("viewWidth"), viewRate = document.getElementById("viewRate");
@@ -50,9 +50,27 @@ if (query.get("fps")) viewRate.value = query.get("fps");
 const frame = document.getElementById("frame"), overlay = document.getElementById("overlay"), map = document.getElementById("map");
 const log = document.getElementById("log"), numbers = document.getElementById("numbers");
 
-// Objects come from the detector, not from the Pi. Boxes are full-frame pixels: [left, top, right, bottom].
-let objects = [];
-window.setObjects = (list) => { objects = list; };
+// Objects come from the detector on the laptop (vision/scan.py --watch), which writes objects.json next to this
+// page after every scan. Positions are floor centimetres, so they are drawn on the map directly and projected into
+// the camera image with the camera pose of the current frame: the outlines stay on the objects as the camera moves.
+let objects = [], objectsInfo = null;
+const textures = new Map();  // object id -> { source, image }
+async function pollObjects() {
+  try {
+    const result = await (await fetch(`objects.json?t=${Date.now()}`, { cache: "no-store" })).json();
+    if (objectsInfo?.updated === result.updated) return;
+    objectsInfo = result;
+    objects = result.objects;
+    for (const o of objects) {
+      if (textures.get(o.id)?.source === o.texture) continue;
+      const image = new Image();
+      image.src = `data:image/png;base64,${o.texture}`;
+      textures.set(o.id, { source: o.texture, image });
+    }
+    addLog(`objects: ${objects.length} found in ${result.seconds} s from ${result.frames} frames (${objects.map((o) => o.label).join(", ")})`, "#fa0");
+  } catch { /* no scan has run yet */ }
+}
+setInterval(pollObjects, 1500);
 
 // Camera image: request the next frame only after the previous one arrived, so a slow link is never flooded.
 let requestedAt = 0;
@@ -139,17 +157,26 @@ function render(state) {
     cell(state.floorMarkers, "used this frame", state.floorMarkers > 0) +
     cell(pose(state.robot), state.robot?.x === undefined ? "robot" : `robot, heading ${state.robot.heading.toFixed(0)}, height ${state.robot.z.toFixed(1)}`, state.robot?.x !== undefined) +
     cell(pose(state.arm), "arm base", state.arm?.x !== undefined) +
-    cell(`${state.fps} fps`, `markers in view: ${state.markers.join(" ") || "none"}`);
+    cell(`${state.fps} fps`, `markers in view: ${state.markers.join(" ") || "none"}`) +
+    cell(objectsInfo ? objects.length : "off", objectsInfo ? `objects, scanned ${Math.round(Date.now() / 1000 - objectsInfo.updated)} s ago` : "objects: run vision/scan.py --watch", objectsInfo ? Date.now() / 1000 - objectsInfo.updated < 20 : undefined);
 
   // Camera view: drawn in full-frame pixels, scaled to the displayed image.
   overlay.width = frame.clientWidth; overlay.height = frame.clientHeight;
   const g = overlay.getContext("2d"), k = overlay.width / frameW;
   g.lineWidth = 2; g.font = "14px sans-serif";
-  for (const o of objects) {
-    const [l, t, r, b] = o.box;
-    g.strokeStyle = g.fillStyle = o.target ? "#4f4" : "#fa0";
-    g.strokeRect(l * k, t * k, (r - l) * k, (b - t) * k);
-    g.fillText(o.label, l * k, t * k - 4);
+  if (state.calibrated) {
+    for (const o of objects) {
+      const outline = o.outline.map(([x, y]) => floorToPixel(state.camera, x, y));
+      const css = `rgb(${o.colour.join(",")})`;
+      g.beginPath();
+      outline.forEach((p, i) => (i ? g.lineTo(p.u * k, p.v * k) : g.moveTo(p.u * k, p.v * k)));
+      g.closePath();
+      g.strokeStyle = "#fff"; g.lineWidth = 3; g.stroke();
+      g.strokeStyle = css; g.lineWidth = 1.5; g.stroke();
+      const top = outline.reduce((a, p) => (p.v < a.v ? p : a));
+      g.fillStyle = "#fff"; g.fillText(o.label, top.u * k, top.v * k - 5);
+    }
+    g.lineWidth = 2;
   }
   for (const [name, colour] of [["robot", "#4cf"], ["arm", "#f6c"]]) {
     const p = state[name];
@@ -166,12 +193,19 @@ function render(state) {
   m.strokeStyle = "#666"; m.strokeRect(pad, map.height - pad - floorH * s, floorW * s, floorH * s);
   m.fillStyle = "#888"; m.font = "12px sans-serif";
   [[0, 0, "1"], [floorW, 0, "2"], [floorW, floorH, "3"], [0, floorH, "4"]].forEach(([x, y, label]) => m.fillText(label, at(x, y)[0] - 3, at(x, y)[1] + 4));
-  if (!state.calibrated) return;
+  if (!state.calibrated && !objects.length) return;
   for (const o of objects) {
-    const [l, t, r, b] = o.box, p = pixelToFloor(state.camera, (l + r) / 2, (t + b) / 2), [x, y] = at(p.x, p.y);
-    m.fillStyle = o.target ? "#4f4" : "#fa0";
-    m.fillRect(x - 5, y - 5, 10, 10);
-    m.fillText(o.label, x + 8, y);
+    // The texture is the object seen from above, upright in its own box: x along the width, the far side on top.
+    const [x, y] = at(o.x, o.y), image = textures.get(o.id)?.image;
+    m.save();
+    m.translate(x, y);
+    m.rotate(-o.yaw);  // the map's y axis points up, the canvas's down
+    if (image?.complete && image.naturalWidth) m.drawImage(image, (-o.width * s) / 2, (-o.length * s) / 2, o.width * s, o.length * s);
+    m.strokeStyle = `rgb(${o.colour.join(",")})`;
+    m.strokeRect((-o.width * s) / 2, (-o.length * s) / 2, o.width * s, o.length * s);
+    m.restore();
+    m.fillStyle = "#ddd";
+    m.fillText(o.label, x - 20, y - (Math.max(o.width, o.length) * s) / 2 - 3);
   }
   for (const [name, colour] of [["robot", "#4cf"], ["arm", "#f6c"]]) {
     const p = state[name];

@@ -32,6 +32,7 @@ TRACKER = os.environ.get("TRACKER_URL", f"http://{PI_HOST}:8003")
 BRIDGE = os.environ.get("BRIDGE_URL", "http://localhost:8080")
 FRAMES, FETCH_INTERVAL_S, FETCH_WIDTH = 12, 0.5, 1152
 SAME_OBJECT_CM = 4  # an object found within this distance of one from the previous scan keeps its id
+PAGE_FILE = Path(__file__).parent.parent / "pi" / "client" / "objects.json"  # read by the live page (pi/client/demo.html)
 
 
 def fetch_frame():
@@ -69,13 +70,15 @@ def name_of(obj):
     return f"{colour} {'box' if obj['fill'] >= 0.8 else 'object'}"
 
 
-def texture_of(obj, picture, mask, view):
+def texture_of(obj, picture, mask, view, mirrored=False):
     """The object cut out of the top view and turned upright: image x runs along the box's width."""
     corners = np.float32([view.to_view(x, y) for x, y in obj["corners"]])
     w, h = max(8, int(obj["width"] * detect.PX_PER_CM)), max(8, int(obj["length"] * detect.PX_PER_CM))
     # corners run 0 -> 1 along the width and 1 -> 2 along the length. Row 0 of the texture is the far side (+length).
     matrix = cv2.getPerspectiveTransform(corners, np.float32([[0, h], [w, h], [w, 0], [0, 0]]))
     rgba = np.dstack([cv2.warpPerspective(picture, matrix, (w, h)), cv2.warpPerspective(mask * 255, matrix, (w, h))])
+    if mirrored:  # the frontend frame flips y for such a floor, which flips the box's own y axis as well
+        rgba = cv2.flip(rgba, 0)
     return base64.b64encode(cv2.imencode(".png", rgba)[1]).decode()
 
 
@@ -102,9 +105,20 @@ def to_obstacles(objects, masks, picture, view, state, previous):
             "width": round(obj["width"] / 100, 4), "length": round(obj["length"] / 100, 4),
             "points": [to_world(x, y) for x, y in obj["outline"]],
             "color": "#%02x%02x%02x" % tuple(obj["colour"]), "confidence": obj["score"],
-            "texture": texture_of(obj, picture, mask, view),
+            "texture": texture_of(obj, picture, mask, view, mirrored),
         })
     return obstacles
+
+
+def publish_for_page(objects, obstacles, seconds, frame_count):
+    """Writes the result where the live page polls for it. Positions stay in the tracker's floor frame (cm), which is
+    what the page works in. The file is replaced in one step, so the page never reads half of it."""
+    page_objects = [{**{k: obj[k] for k in ("x", "y", "width", "length", "yaw", "corners", "outline", "colour")},
+                     "id": obstacle["id"], "label": obstacle["label"], "texture": obstacle["texture"]}
+                    for obj, obstacle in zip(objects, obstacles)]
+    temporary = PAGE_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"updated": time.time(), "seconds": round(seconds, 1), "frames": frame_count, "objects": page_objects}))
+    temporary.replace(PAGE_FILE)
 
 
 def send(obstacles):
@@ -116,6 +130,7 @@ def scan(frames, sam, previous):
     started = time.time()
     objects, picture, _, view, masks = detect.detect(frames, tuple(frames[0][1]["floor"]), sam, return_masks=True)
     obstacles = to_obstacles(objects, masks, picture, view, frames[0][1], previous)
+    publish_for_page(objects, obstacles, time.time() - started, len(frames))
     print(f"{len(obstacles)} objects from {len(frames)} frames in {time.time() - started:.1f} s: " + ", ".join(o["id"] for o in obstacles))
     return obstacles, detect.draw(objects, picture, view)
 
