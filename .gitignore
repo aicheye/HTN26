@@ -1,9 +1,15 @@
+node_modules
+dist
+*.tsbuildinfo
+.env.local
+*.local
+.DS_Store
+
 .venv/
 __pycache__/
 lerobot/
 .pio/
 .vscode/
-node_modules/
 
 # Output copied back from the Pi, and QNX's own headers (not ours to redistribute)
 pi/*.log

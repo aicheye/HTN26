@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "seq": 0,
+  "timestamp": 1758240000000,
+  "arena": {
+    "width": 0.635,
+    "length": 0.635,
+    "cornerTagIds": [1, 2, 3, 4],
+    "surface": "wood",
+    "tagSize": 0.08
+  },
+  "calibration": { "ok": true, "reprojectionError": 0.42 },
+  "robots": [
+    {
+      "id": "sesame-1",
+      "tagId": 0,
+      "x": 0.3175,
+      "y": 0.3175,
+      "yaw": 0.7853981633974483,
+      "footprint": { "width": 0.105, "length": 0.125 },
+      "tracking": true,
+      "lastSeen": 1758240000000,
+      "confidence": 0.94,
+      "mode": "idle",
+      "face": "idle"
+    }
+  ],
+  "obstacles": [],
+  "arm": {
+    "mount": { "x": 0, "y": 0.3175, "yaw": 0, "side": "west" },
+    "joints": {
+      "waist": 0,
+      "shoulder": -1.3,
+      "elbow": 1.4,
+      "wristPitch": 0,
+      "wristRoll": 0,
+      "gripper": 0.05
+    },
+    "mode": "idle"
+  }
+}
