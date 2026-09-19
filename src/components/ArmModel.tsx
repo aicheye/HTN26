@@ -15,17 +15,18 @@ export function ArmModel({ arm }: { arm: ArmState }) {
 
   return (
     <group position={[arm.mount.x, arm.mount.y, 0]} rotation={[0, 0, arm.mount.yaw]}>
-      <mesh position={[0, 0, L.plate / 2]} castShadow receiveShadow>
-        <boxGeometry args={[0.0442, 0.0442, L.plate]} />
+      {/* clamped to the table edge: the plate straddles the boundary, half outside the arena */}
+      <mesh position={[-0.02, 0, 0.011]} castShadow receiveShadow>
+        <boxGeometry args={[0.07, 0.06, 0.022]} />
         <meshStandardMaterial color={ARM_COLOR} roughness={0.6} />
       </mesh>
 
-      <mesh position={[0, 0, L.pedestal / 2 + L.plate]} castShadow>
+      <mesh position={[0, 0, L.pedestal / 2 + 0.022]} castShadow>
         <boxGeometry args={[0.0235, 0.0235, L.pedestal]} />
         <meshStandardMaterial color={ARM_JOINT_COLOR} roughness={0.6} metalness={0.2} />
       </mesh>
 
-      <group position={[0, 0, L.pedestal + L.plate]} rotation={[0, 0, waist]}>
+      <group position={[0, 0, L.pedestal + 0.022]} rotation={[0, 0, waist]}>
         <Servo />
         <mesh position={[0, 0, L.shoulderRise / 2]} castShadow>
           <boxGeometry args={[0.0155, 0.0166, L.shoulderRise]} />
