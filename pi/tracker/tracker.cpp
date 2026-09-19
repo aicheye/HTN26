@@ -7,9 +7,12 @@
 // Marker 0 is on the robot. Marker 5 is taped flat on the floor against the base of the SO-101 arm.
 // Markers 1 to 4 are taped flat on the floor at the corners of a
 // rectangle: 1 = (0, 0), 2 = (W, 0), 3 = (W, H), 4 = (0, H).
-// The camera may move. The layout of the floor markers is recorded once, from the first moment all four
-// are visible and the camera has been held still for a few frames. That records where each of
-// their corners lies on the floor. After that, every frame solves the camera's position from
+// The camera may move, and it never has to see all four floor markers at once. The floor markers' centres
+// are known from the two measurements. What is learned is how each one is rotated on the floor: any steady
+// frame with two or more floor markers gives the floor's x and y directions (from where the markers lie
+// relative to each other, using their known 8 cm size for distance), and from those the floor position of
+// every corner of the markers in view. One frame with three markers settles whether markers 1, 2, 3, 4 run
+// clockwise or counter-clockwise. After that, every frame solves the camera's position from
 // whichever floor markers are visible (one is enough, more is steadier). Each tracked marker's
 // height then comes from its known printed size, and its x, y from where its pixel ray crosses
 // that height. Frames with no floor marker in view report pixel positions only.
@@ -53,6 +56,7 @@
 static const int ROBOT_ID = 0;
 static const int ARM_BASE_ID = 5;
 static const float TRACKED_MARKER_CM = 3.6f;  // printed side length of markers 0 and 5
+static const float FLOOR_MARKER_CM = 8.0f;    // printed side length of markers 1 to 4
 
 // Camera Module 3, standard lens, 2304x1296 mode (2x2 binned): 4.74 mm / (2 * 1.4 um) = 1693 px.
 // The wide-angle module is 2.75 mm, which gives 982 px.
@@ -224,11 +228,15 @@ int main(int argc, char** argv) {
   const std::vector<cv::Point3f> floorCorners{{0, 0, 0}, {floorW, 0, 0}, {floorW, floorH, 0}, {0, floorH, 0}};
   FloorCamera cam;
   std::vector<cv::Point3f> floorMarkerCorners[5];  // floor position of each corner of markers 1 to 4, once learned
-  bool layoutLearned = false;
-  std::vector<cv::Point2f> previousSeen;  // floor marker centres in the last frame that showed all four
-  int steadyFrames = 0;
-  const int STEADY_FRAMES_NEEDED = 5;     // the camera may be handheld: learn only while it is held still
-  const float STEADY_MAX_MOVE_PX = 3;
+  cv::Point2d cornerSum[5][4] = {};        // running sums while a marker's corners are being learned
+  int cornerSamples[5] = {};
+  int handedness = 0;                      // +1: markers 1, 2, 3, 4 run counter-clockwise seen from above. -1: clockwise. 0: unknown
+  cv::Point2f previousCentre[5];
+  bool hadPrevious[5] = {};
+  const int SAMPLES_NEEDED = 8;
+  const float STEADY_MAX_MOVE_PX = 6;      // learn only from frames where the camera barely moved, to avoid motion blur
+  const float fh = FLOOR_MARKER_CM / 2;
+  const std::vector<cv::Point3f> floorMarkerShape{{-fh, fh, 0}, {fh, fh, 0}, {fh, -fh, 0}, {-fh, -fh, 0}};
   const cv::Mat noDistortion;
   const float half = TRACKED_MARKER_CM / 2;
   // Corner order matches ArUco's: top-left, top-right, bottom-right, bottom-left.
@@ -269,53 +277,92 @@ int main(int argc, char** argv) {
     cam.valid = false;
     cam.K = cv::Matx33d(FOCAL_PX, 0, gray.cols / 2.0, 0, FOCAL_PX, gray.rows / 2.0, 0, 0, 1);
 
-    // Learn the floor layout once, from a frame that shows all four floor markers.
-    if (!layoutLearned) {
-      std::vector<cv::Point2f> seen(4);
-      int found = 0;
-      for (size_t i = 0; i < ids.size(); i++) {
-        if (ids[i] >= 1 && ids[i] <= 4) {
-          seen[ids[i] - 1] = centerOf(corners[i]);
-          found++;
-        }
-      }
-      // Count consecutive frames in which all four markers are visible and have barely moved.
-      float moved = STEADY_MAX_MOVE_PX + 1;
-      if (found == 4 && previousSeen.size() == 4) {
-        moved = 0;
-        for (int i = 0; i < 4; i++) moved = std::max(moved, (float)cv::norm(seen[i] - previousSeen[i]));
-      }
-      steadyFrames = found == 4 && moved <= STEADY_MAX_MOVE_PX ? steadyFrames + 1 : 0;
-      previousSeen = found == 4 ? seen : std::vector<cv::Point2f>();
+    // Pose of each visible floor marker relative to the camera, from its known size.
+    struct SeenFloorMarker { int id; cv::Matx33d R; cv::Vec3d t; };
+    std::vector<SeenFloorMarker> seen;
+    bool steady = true;
+    bool visibleNow[5] = {};
+    for (size_t i = 0; i < ids.size(); i++) {
+      int id = ids[i];
+      if (id < 1 || id > 4) continue;
+      cv::Point2f centre = centerOf(corners[i]);
+      if (!hadPrevious[id] || cv::norm(centre - previousCentre[id]) > STEADY_MAX_MOVE_PX) steady = false;
+      previousCentre[id] = centre;
+      visibleNow[id] = true;
       cv::Vec3d rvec, tvec;
-      if (steadyFrames >= STEADY_FRAMES_NEEDED &&
-          cv::solvePnP(floorCorners, seen, cam.K, noDistortion, rvec, tvec, false, cv::SOLVEPNP_IPPE)) {
-        setPose(rvec, tvec);
-        for (size_t i = 0; i < ids.size(); i++) {
-          if (ids[i] < 1 || ids[i] > 4) continue;
-          for (const cv::Point2f& corner : corners[i]) {
-            cv::Point2f onFloor = cam.rayAtHeight(corner, 0);
-            floorMarkerCorners[ids[i]].push_back({onFloor.x, onFloor.y, 0});
+      if (!cv::solvePnP(floorMarkerShape, corners[i], cam.K, noDistortion, rvec, tvec, false, cv::SOLVEPNP_IPPE_SQUARE)) continue;
+      cv::Matx33d R;
+      cv::Rodrigues(rvec, R);
+      seen.push_back({id, R, tvec});
+    }
+    for (int id = 1; id <= 4; id++) hadPrevious[id] = visibleNow[id];
+
+    // Learn marker corners from steady frames that show at least two floor markers.
+    bool allLearned = cornerSamples[1] >= SAMPLES_NEEDED && cornerSamples[2] >= SAMPLES_NEEDED &&
+                      cornerSamples[3] >= SAMPLES_NEEDED && cornerSamples[4] >= SAMPLES_NEEDED;
+    if (!allLearned && steady && seen.size() >= 2) {
+      cv::Vec3d normal(0, 0, 0);
+      for (const auto& m : seen) normal += cv::Vec3d(m.R(0, 2), m.R(1, 2), m.R(2, 2));
+      normal /= cv::norm(normal);
+      // Floor x direction in camera coordinates, from every pair of markers, for one assumed handedness.
+      auto floorX = [&](int sign, double* agreement) {
+        cv::Vec3d sum(0, 0, 0);
+        int pairs = 0;
+        for (size_t a = 0; a < seen.size(); a++) {
+          for (size_t b = a + 1; b < seen.size(); b++) {
+            cv::Vec3d d = seen[b].t - seen[a].t;
+            d -= normal * normal.dot(d);
+            d /= cv::norm(d);
+            cv::Point3f fa = floorCorners[seen[a].id - 1], fb = floorCorners[seen[b].id - 1];
+            double fx = fb.x - fa.x, fy = fb.y - fa.y, length = std::hypot(fx, fy);
+            sum += (fx / length) * d - (fy / length) * sign * normal.cross(d);
+            pairs++;
           }
         }
-        layoutLearned = true;
-        std::printf("floor layout learned: camera %.0f cm above the floor, over floor point (%.0f, %.0f)\n",
-                    std::abs(cam.C[2]), cam.C[0], cam.C[1]);
+        if (agreement) *agreement = cv::norm(sum) / pairs;  // 1 when every pair gives the same direction
+        return sum / cv::norm(sum);
+      };
+      if (handedness == 0 && seen.size() >= 3) {
+        double counterClockwise = 0, clockwise = 0;
+        floorX(1, &counterClockwise);
+        floorX(-1, &clockwise);
+        if (std::abs(counterClockwise - clockwise) > 0.2) {
+          handedness = counterClockwise > clockwise ? 1 : -1;
+          std::printf("floor markers 1, 2, 3, 4 run %s seen from above\n", handedness > 0 ? "counter-clockwise" : "clockwise");
+        }
+      }
+      if (handedness != 0) {
+        cv::Vec3d ex = floorX(handedness, nullptr), ey = handedness * normal.cross(ex);
+        for (const auto& m : seen) {
+          if (cornerSamples[m.id] >= SAMPLES_NEEDED) continue;
+          cv::Point3f centre = floorCorners[m.id - 1];
+          for (int k = 0; k < 4; k++) {
+            cv::Vec3d offset = m.R * cv::Vec3d(floorMarkerShape[k].x, floorMarkerShape[k].y, 0);
+            cornerSum[m.id][k] += cv::Point2d(centre.x + offset.dot(ex), centre.y + offset.dot(ey));
+          }
+          if (++cornerSamples[m.id] == SAMPLES_NEEDED) {
+            for (int k = 0; k < 4; k++) {
+              floorMarkerCorners[m.id].push_back({(float)(cornerSum[m.id][k].x / SAMPLES_NEEDED), (float)(cornerSum[m.id][k].y / SAMPLES_NEEDED), 0});
+            }
+            std::printf("floor marker %d learned\n", m.id);
+          }
+        }
       }
     }
 
-    // Solve this frame's camera pose from every visible floor marker corner.
+    // Solve this frame's camera pose from every visible corner of the floor markers learned so far.
+    // The first solve needs two markers, because one small marker alone can give a mirrored tilt.
     int floorMarkersSeen = 0;
-    if (layoutLearned) {
+    {
       std::vector<cv::Point3f> onFloor;
       std::vector<cv::Point2f> inImage;
       for (size_t i = 0; i < ids.size(); i++) {
-        if (ids[i] < 1 || ids[i] > 4) continue;
+        if (ids[i] < 1 || ids[i] > 4 || floorMarkerCorners[ids[i]].empty()) continue;
         floorMarkersSeen++;
         onFloor.insert(onFloor.end(), floorMarkerCorners[ids[i]].begin(), floorMarkerCorners[ids[i]].end());
         inImage.insert(inImage.end(), corners[i].begin(), corners[i].end());
       }
-      if (floorMarkersSeen > 0) {
+      if (floorMarkersSeen >= (cam.hasPrevious ? 1 : 2)) {
         // Starting from the previous pose keeps the solution from flipping when few markers are visible.
         cv::Vec3d rvec = cam.rvec, tvec = cam.tvec;
         bool ok = cam.hasPrevious
@@ -359,11 +406,10 @@ int main(int argc, char** argv) {
       fps = framesSinceReport / std::chrono::duration<float>(now - lastReport).count();
       framesSinceReport = 0;
       lastReport = now;
-      int floorVisible = 0;
-      for (int id : ids) floorVisible += id >= 1 && id <= 4;
-      std::printf("%.1f fps, camera height %.0f cm, floor markers %d of 4%s, markers [%s], robot %s, arm %s\n", fps,
-                  cam.valid ? std::abs(cam.C[2]) : -1.0, floorVisible, layoutLearned ? "" : " (need all 4 held still to learn the layout)",
-                  idList.c_str(), robot.c_str(), arm.c_str());
+      int learned = 0;
+      for (int id = 1; id <= 4; id++) learned += !floorMarkerCorners[id].empty();
+      std::printf("%.1f fps, camera height %.0f cm, floor markers: %d learned, %d used this frame, markers [%s], robot %s, arm %s\n", fps,
+                  cam.valid ? std::abs(cam.C[2]) : -1.0, learned, floorMarkersSeen, idList.c_str(), robot.c_str(), arm.c_str());
       std::fflush(stdout);
     }
 

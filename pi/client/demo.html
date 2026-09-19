@@ -27,7 +27,7 @@ const frame = document.getElementById("frame"), overlay = document.getElementByI
 let objects = [];
 window.setObjects = (list) => { objects = list; };
 
-setInterval(() => { frame.src = `${base}/frame.jpg?w=960&t=${Date.now()}`; }, 500);
+setInterval(() => { frame.src = `${base}/annotated.jpg?w=960&t=${Date.now()}`;  // detected markers are outlined, which helps with aiming }, 500);
 
 new EventSource(`${base}/events`).onmessage = (event) => {
   const state = JSON.parse(event.data);
