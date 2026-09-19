@@ -105,7 +105,10 @@ def main():
     ap.add_argument("--release", action="store_true", help="torque off at the end")
     args = ap.parse_args()
 
-    demo = load(args.demo)
+    try:
+        demo = load(args.demo)
+    except FileNotFoundError:
+        print(f"no demo '{args.demo}': record one with record_demo.py (with the tracker running)"); return 1
     if not os.path.exists(args.frame):
         print(f"{args.frame} not found: run calibrate_arm_frame.py first"); return 1
     frame0 = ArmFrame.load(args.frame)

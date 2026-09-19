@@ -25,6 +25,7 @@ Phases, all solved through so101_ik.ik and checked before the first move:
   retract   straight up, then a slow joint-space slew to the ready pose
 """
 import argparse
+import os
 import sys
 import time
 
@@ -184,7 +185,13 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="plan only, never connect to the arm")
     args = ap.parse_args()
 
-    demo = load(args.demo); frame0 = ArmFrame.load(args.frame)
+    try:
+        demo = load(args.demo)
+    except FileNotFoundError:
+        print(f"no demo '{args.demo}': record one with record_demo.py (with the tracker running)"); return 1
+    if not os.path.exists(args.frame):
+        print(f"{args.frame} not found: run calibrate_arm_frame.py first (fingertips on the Sesame's tag, 3 placements)"); return 1
+    frame0 = ArmFrame.load(args.frame)
     tracker = Tracker(args.tracker); poller = Poller(tracker, period=0.3)
     arm = None if args.dry_run else Arm(args.port)
 
