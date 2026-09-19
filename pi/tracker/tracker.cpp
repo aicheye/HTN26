@@ -81,9 +81,21 @@ static void onFrame(camera_handle_t, camera_buffer_t* buf, void*) {
 
 static void onStatus(camera_handle_t, camera_devstatus_t, uint16_t, void*) {}
 
+// What the HTTP threads read. The tracking loop writes it once per frame. HTTP requests are handled on their
+// own threads, so a browser that connects and sends nothing, or a slow image transfer, never pauses tracking.
+struct Shared {
+  std::mutex mutex;
+  cv::Mat gray, uv;
+  std::vector<std::vector<cv::Point2f>> corners;
+  std::vector<int> ids;
+  std::string state = "{}\n";
+  std::vector<int> eventClients;
+  std::vector<std::string> recentLog, unsentLog;
+};
+static Shared shared;
+
 // Everything the tracker prints also goes to web clients: /events sends each line as a "log" event, and a
 // client that connects later first receives the recent lines.
-static std::vector<std::string> recentLog, unsentLog;
 
 static void say(const char* format, ...) {
   char text[900];
@@ -95,9 +107,10 @@ static void say(const char* format, ...) {
   while (!line.empty() && line.back() == '\n') line.pop_back();
   std::printf("%s\n", line.c_str());
   std::fflush(stdout);
-  recentLog.push_back(line);
-  if (recentLog.size() > 40) recentLog.erase(recentLog.begin());
-  unsentLog.push_back(line);
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  shared.recentLog.push_back(line);
+  if (shared.recentLog.size() > 40) shared.recentLog.erase(shared.recentLog.begin());
+  shared.unsentLog.push_back(line);
 }
 
 static std::string logEvent(const std::string& line) { return "event: log\ndata: " + line + "\n\n"; }
@@ -124,15 +137,17 @@ static void sendAll(int fd, const char* data, size_t size) {
   }
 }
 
-// Answers one HTTP request. Returns the socket if it became an event stream that must stay open, else -1.
-static int handleHttp(int fd, const cv::Mat& gray, const cv::Mat& uv, const std::vector<std::vector<cv::Point2f>>& corners,
-                      const std::vector<int>& ids, const std::string& stateLine) {
+// Answers one HTTP request on its own thread.
+static void handleHttp(int fd) {
   fcntl(fd, F_SETFL, 0);  // the accepted socket may inherit non-blocking mode
   timeval timeout{2, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-  char request[1024] = {0};
-  recv(fd, request, sizeof(request) - 1, 0);
+  char request[2048] = {0};
+  if (recv(fd, request, sizeof(request) - 1, 0) <= 0) {
+    close(fd);
+    return;
+  }
   std::string path(request);
   path = path.substr(0, path.find("\r\n"));
   const std::string common = "Access-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\n";
@@ -140,19 +155,33 @@ static int handleHttp(int fd, const cv::Mat& gray, const cv::Mat& uv, const std:
   if (path.find("GET /events") == 0) {
     std::string header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n" + common + "Connection: keep-alive\r\n\r\n";
     sendAll(fd, header.data(), header.size());
-    for (const std::string& line : recentLog) {
+    std::lock_guard<std::mutex> lock(shared.mutex);  // held while joining, so no log line is missed or sent twice
+    for (const std::string& line : shared.recentLog) {
       std::string event = logEvent(line);
       sendAll(fd, event.data(), event.size());
     }
     fcntl(fd, F_SETFL, O_NONBLOCK);  // a slow browser must not stall the tracker
-    return fd;
+    shared.eventClients.push_back(fd);
+    return;
   }
 
+  cv::Mat gray, uv;
+  std::vector<std::vector<cv::Point2f>> corners;
+  std::vector<int> ids;
+  std::string state;
+  {
+    std::lock_guard<std::mutex> lock(shared.mutex);
+    gray = shared.gray;  // shares the pixels. The tracking loop never changes a frame after publishing it
+    uv = shared.uv;
+    corners = shared.corners;
+    ids = shared.ids;
+    state = shared.state;
+  }
   std::string body, type;
   if (path.find("GET /state.json") == 0) {
-    body = stateLine;
+    body = state;
     type = "application/json";
-  } else if (path.find("GET /frame.jpg") == 0 || path.find("GET /annotated.jpg") == 0) {
+  } else if ((path.find("GET /frame.jpg") == 0 || path.find("GET /annotated.jpg") == 0) && !gray.empty()) {
     cv::Mat bgr;
     cv::cvtColorTwoPlane(gray, uv, bgr, cv::COLOR_YUV2BGR_NV12);
     if (path.find("GET /annotated.jpg") == 0) cv::aruco::drawDetectedMarkers(bgr, corners, ids);
@@ -160,20 +189,24 @@ static int handleHttp(int fd, const cv::Mat& gray, const cv::Mat& uv, const std:
     int width = w == std::string::npos ? 0 : std::atoi(path.c_str() + w + 2);
     if (width >= 160 && width < bgr.cols) cv::resize(bgr, bgr, cv::Size(width, bgr.rows * width / bgr.cols), 0, 0, cv::INTER_AREA);
     std::vector<uchar> jpeg;
-    cv::imencode(".jpg", bgr, jpeg, {cv::IMWRITE_JPEG_QUALITY, 85});
+    cv::imencode(".jpg", bgr, jpeg, {cv::IMWRITE_JPEG_QUALITY, 80});
     body.assign(jpeg.begin(), jpeg.end());
     type = "image/jpeg";
   }
   std::string header = body.empty() ? "HTTP/1.1 404 Not Found\r\n" : "HTTP/1.1 200 OK\r\nContent-Type: " + type + "\r\n";
   header += common + "Content-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n";
-  // The robot's access point is slow, and a frame can take a large part of a second to send. Sending from
-  // its own thread keeps that from pausing the tracker.
-  std::thread([fd, header, body] {
-    sendAll(fd, header.data(), header.size());
-    sendAll(fd, body.data(), body.size());
-    close(fd);
-  }).detach();
-  return -1;
+  sendAll(fd, header.data(), header.size());
+  sendAll(fd, body.data(), body.size());
+  close(fd);
+}
+
+// Accepts HTTP connections for the whole run and gives each one its own thread.
+static void serveHttp(int listener) {
+  fcntl(listener, F_SETFL, 0);  // blocking accept
+  for (;;) {
+    int fd = accept(listener, nullptr, nullptr);
+    if (fd >= 0) std::thread(handleHttp, fd).detach();
+  }
 }
 
 // Sends one message to every client. A full send buffer skips the message. Any other error drops the client.
@@ -233,7 +266,8 @@ int main(int argc, char** argv) {
     say("cannot listen on ports %d and %d\n", port, 8000 + unit);
     return 2;
   }
-  std::vector<int> clients, eventClients;
+  std::vector<int> clients;
+  std::thread(serveHttp, httpServer).detach();
 
   camera_handle_t handle = CAMERA_HANDLE_INVALID;
   camera_error_t err = camera_open((camera_unit_t)unit, CAMERA_MODE_RO, &handle);
@@ -459,15 +493,19 @@ int main(int argc, char** argv) {
                        "],\"robot\":" + robot + ",\"arm\":" + arm + ",\"camera\":" + cameraJson + "}\n";
 
     int fd;
-    while ((fd = accept(httpServer, nullptr, nullptr)) >= 0) {
-      int kept = handleHttp(fd, gray, uv, corners, ids, line);
-      if (kept >= 0) eventClients.push_back(kept);
-    }
     while ((fd = accept(server, nullptr, nullptr)) >= 0) clients.push_back(fd);
     broadcast(clients, line);
-    broadcast(eventClients, "data: " + line + "\n");  // line already ends with a newline, which completes the event
-    for (const std::string& text : unsentLog) broadcast(eventClients, logEvent(text));
-    unsentLog.clear();
+    {
+      std::lock_guard<std::mutex> lock(shared.mutex);
+      shared.gray = gray;
+      shared.uv = uv;
+      shared.corners = corners;
+      shared.ids = ids;
+      shared.state = line;
+      broadcast(shared.eventClients, "data: " + line + "\n");  // line already ends with a newline, which completes the event
+      for (const std::string& text : shared.unsentLog) broadcast(shared.eventClients, logEvent(text));
+      shared.unsentLog.clear();
+    }
 
     // Colour snapshot with detections drawn, for checking the camera aim and the markers.
     if (now - lastSnapshot >= std::chrono::seconds(5)) {

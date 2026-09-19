@@ -44,8 +44,13 @@ function nextFrame() {
   requestedAt = Date.now();
   frame.src = `${base}/annotated.jpg?w=${imageWidth}&t=${requestedAt}`;
 }
-frame.onload = frame.onerror = () => setTimeout(nextFrame, Math.max(0, frameInterval - (Date.now() - requestedAt)));
-nextFrame();
+let imageFailures = 0;
+const scheduleFrame = () => setTimeout(nextFrame, Math.max(0, frameInterval - (Date.now() - requestedAt)));
+frame.onload = () => { imageFailures = 0; scheduleFrame(); };
+frame.onerror = () => {
+  if (++imageFailures === 3) addLog(`camera image is not loading from ${base}/annotated.jpg`, "#f66");
+  setTimeout(nextFrame, 1000);
+};
 
 function addLog(text, colour) {
   const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
@@ -57,15 +62,33 @@ function addLog(text, colour) {
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
-let lastStateAt = 0;
+// State normally arrives pushed over the event stream. If the stream delivers nothing for 3 seconds, the page
+// polls /state.json instead, and says so in the log, so a problem with one path does not blank the page.
+let lastStateAt = 0, lastStreamAt = 0, polling = false, lastComplaintAt = 0;
 const events = new EventSource(`${base}/events`);
-events.onopen = () => addLog(`connected to ${base}`, "#6cf");
-events.onerror = () => addLog("connection to the tracker lost, retrying", "#f66");
+events.onopen = () => addLog(`event stream open to ${base}`, "#6cf");
+events.onerror = () => { if (Date.now() - lastComplaintAt > 5000) { lastComplaintAt = Date.now(); addLog("event stream error, the browser will retry", "#f66"); } };
 events.addEventListener("log", (event) => addLog(event.data));  // every line the tracker prints
-setInterval(() => { if (Date.now() - lastStateAt > 1500) numbers.innerHTML = `<div class="bad"><b>no data</b>is the tracker running?</div>`; }, 1000);
-
 events.onmessage = (event) => {
-  const state = JSON.parse(event.data);
+  lastStreamAt = Date.now();
+  if (polling) { polling = false; addLog("event stream is delivering again, polling stopped", "#6cf"); }
+  render(JSON.parse(event.data));
+};
+setInterval(async () => {
+  if (Date.now() - lastStreamAt > 3000) {
+    try {
+      const state = await (await fetch(`${base}/state.json`, { cache: "no-store" })).json();
+      if (!polling) { polling = true; addLog("event stream is silent, polling /state.json instead", "#fa0"); }
+      if (state.frame) render(state);
+    } catch (error) {
+      if (Date.now() - lastComplaintAt > 5000) { lastComplaintAt = Date.now(); addLog(`cannot reach the tracker at ${base}: ${error.message}`, "#f66"); }
+    }
+  }
+  if (Date.now() - lastStateAt > 1500) numbers.innerHTML = `<div class="bad"><b>no data</b>is the tracker running?</div>`;
+}, 250);
+nextFrame();
+
+function render(state) {
   lastStateAt = Date.now();
   const [frameW] = state.frame, [floorW, floorH] = state.floor;
   const cell = (value, label, good) => `<div class="${good === undefined ? "" : good ? "ok" : "bad"}"><b>${value}</b>${label}</div>`;
@@ -118,5 +141,5 @@ events.onmessage = (event) => {
     m.beginPath(); m.arc(x, y, 8, 0, 7); m.moveTo(x, y); m.lineTo(x + 20 * Math.cos(a), y - 20 * Math.sin(a)); m.stroke();
     m.fillText(name, x + 12, y - 12);
   }
-};
+}
 </script>
