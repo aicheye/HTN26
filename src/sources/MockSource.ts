@@ -3,13 +3,14 @@ import {
   ARM_ASSIST_HEIGHT_M,
   ARM_CARRY_LIFT_M,
   ARM_REST_POSE,
+  ARM_TRANSIT_HEIGHT_M,
+  armTipPosition,
   clampArmJoint,
   isWithinArmReach,
   solveArmIK,
 } from "../components/mapShared";
 import type {
   Ack,
-  ArmJointAngles,
   ArmMode,
   Command,
   Obstacle,
@@ -70,6 +71,11 @@ export class MockSource implements StateSource {
   private armFrom: Point | null = null;
   private armTo: Point | null = null;
   private lastBlockedBy: Obstacle | null = null;
+  // smoothed gripper target used while reaching/carrying, so the tip travels
+  // in a straight Cartesian line (and floor height) instead of swinging
+  // through the floor when joint angles are interpolated directly
+  private armPoint: Point = { x: 0, y: 0 };
+  private armZ = 0;
 
   private stateSubs = new Set<(s: WorldState) => void>();
   private ackSubs = new Set<(a: Ack) => void>();
@@ -304,23 +310,35 @@ export class MockSource implements StateSource {
     const dir = normalize({ x: obstacle.x - this.truth.x, y: obstacle.y - this.truth.y });
     const margin = Math.max(robot.footprint.width, robot.footprint.length) / 2;
     const { width, length } = this.state.arena;
-    let clearance = obstacleRadius(obstacle) + margin + 0.09;
-    let px = obstacle.x + dir.x * clearance;
-    let py = obstacle.y + dir.y * clearance;
-    // keep pushing past the obstacle until the landing spot is actually clear
-    for (let i = 0; i < 12 && this.findBlocker(px, py, margin); i++) {
-      clearance += 0.06;
-      px = obstacle.x + dir.x * clearance;
-      py = obstacle.y + dir.y * clearance;
+    const base = obstacleRadius(obstacle) + margin + 0.09;
+
+    const forward = dir;
+    const side = { x: -dir.y, y: dir.x };
+    const directions = [forward, side, { x: -side.x, y: -side.y }, { x: -forward.x, y: -forward.y }];
+    let drop: Point | null = null;
+    for (const testDir of directions) {
+      for (let i = 0; i < 14; i++) {
+        const c = base + i * 0.05;
+        const p = {
+          x: clamp(obstacle.x + testDir.x * c, margin, width - margin),
+          y: clamp(obstacle.y + testDir.y * c, margin, length - margin),
+        };
+        if (!this.findBlocker(p.x, p.y, margin) && isWithinArmReach(arm.mount, p)) {
+          drop = p;
+          break;
+        }
+      }
+      if (drop) break;
     }
-    px = clamp(px, margin, width - margin);
-    py = clamp(py, margin, length - margin);
-    // the drop-off has to be somewhere the gripper can actually reach
-    if (!isWithinArmReach(arm.mount, { x: px, y: py })) return;
+    if (!drop) return;
 
     this.armFrom = { x: this.truth.x, y: this.truth.y };
-    this.armTo = { x: px, y: py };
+    this.armTo = drop;
     this.armElapsed = 0;
+    // start the Cartesian smoothing from wherever the gripper currently sits
+    const tip = armTipPosition(arm.mount, arm.joints);
+    this.armPoint = { x: tip.x, y: tip.y };
+    this.armZ = tip.z;
     arm.mode = "reaching";
     arm.targetRobotId = robot.id;
   }
@@ -337,12 +355,23 @@ export class MockSource implements StateSource {
       this.truth.y = lerp(this.armFrom.y, this.armTo.y, t);
     }
 
-    const target = this.armTargetJoints(arm);
     const k = 1 - Math.exp(-8 * dt);
-    (Object.keys(target) as (keyof ArmJointAngles)[]).forEach((key) => {
-      const next = arm.joints[key] + (target[key] - arm.joints[key]) * k;
-      arm.joints[key] = clampArmJoint(key, next);
-    });
+
+    // move the gripper's target point in a straight Cartesian line (and re-solve IK each
+    // frame) so the tip's height changes monotonically and can't dip through the floor -
+    // "returning" aims at the rest pose's own tip position, not its (very folded) angles,
+    // since interpolating those angles directly swings the tip below the floor partway through
+    const { point, z, gripper } = this.armPhaseTarget(arm);
+    this.armPoint.x += (point.x - this.armPoint.x) * k;
+    this.armPoint.y += (point.y - this.armPoint.y) * k;
+    this.armZ += (z - this.armZ) * k;
+    const ik = solveArmIK(arm.mount, this.armPoint, this.armZ);
+    arm.joints.waist = clampArmJoint("waist", ik.waist);
+    arm.joints.shoulder = clampArmJoint("shoulder", ik.shoulder);
+    arm.joints.elbow = clampArmJoint("elbow", ik.elbow);
+    arm.joints.wristPitch = clampArmJoint("wristPitch", ik.wristPitch);
+    arm.joints.wristRoll = 0;
+    arm.joints.gripper += (gripper - arm.joints.gripper) * k;
 
     const dur = ARM_PHASE_MS[arm.mode];
     if (dur !== undefined && this.armElapsed >= dur) {
@@ -350,6 +379,8 @@ export class MockSource implements StateSource {
       const next = ARM_NEXT[arm.mode] ?? "idle";
       arm.mode = next;
       if (next === "idle") {
+        // snap into the exact folded rest shape now that the tip has arrived at its position
+        arm.joints = { ...ARM_REST_POSE, waist: 0 };
         arm.targetRobotId = undefined;
         this.armFrom = null;
         this.armTo = null;
@@ -361,10 +392,17 @@ export class MockSource implements StateSource {
     }
   }
 
-  /** IK target for the current phase: where the gripper should be, and how open. */
-  private armTargetJoints(arm: NonNullable<WorldState["arm"]>): ArmJointAngles {
+  /** Where the gripper should be for the current phase, and how open. */
+  private armPhaseTarget(arm: NonNullable<WorldState["arm"]>): {
+    point: Point;
+    z: number;
+    gripper: number;
+  } {
     if (arm.mode === "returning") {
-      return { ...ARM_REST_POSE, waist: 0 };
+      // aim at the rest pose's own tip position (not its very-folded angles) so the
+      // Cartesian smoothing below can't swing the tip below the floor on the way there
+      const tip = armTipPosition(arm.mount, { ...ARM_REST_POSE, waist: 0 });
+      return { point: { x: tip.x, y: tip.y }, z: tip.z, gripper: 0.1 };
     }
 
     const point =
@@ -375,18 +413,19 @@ export class MockSource implements StateSource {
           : (this.armFrom ?? this.truth);
 
     const z =
-      arm.mode === "lifting" || arm.mode === "carrying"
-        ? ARM_CARRY_LIFT_M
-        : arm.mode === "placing"
-          ? ARM_CARRY_LIFT_M *
-            (1 - easeInOut(clamp(this.armElapsed / (ARM_PHASE_MS.placing ?? 1), 0, 1)))
-          : 0;
+      arm.mode === "reaching"
+        ? ARM_TRANSIT_HEIGHT_M
+        : arm.mode === "lifting" || arm.mode === "carrying"
+          ? ARM_CARRY_LIFT_M
+          : arm.mode === "placing"
+            ? ARM_CARRY_LIFT_M *
+              (1 - easeInOut(clamp(this.armElapsed / (ARM_PHASE_MS.placing ?? 1), 0, 1)))
+            : 0;
 
-    const ik = solveArmIK(arm.mount, point, z);
     const gripper =
       arm.mode === "reaching" || arm.mode === "releasing" ? 0.6 : arm.mode === "idle" ? 0.1 : 0;
 
-    return { ...ik, wristRoll: 0, gripper };
+    return { point, z, gripper };
   }
 }
 

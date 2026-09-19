@@ -70,53 +70,56 @@ export function distanceTo(o: Obstacle, p: Point): number {
 }
 
 /**
- * SO-101 arm geometry, in meters. Proportions follow the arm's own URDF joint
- * chain (onshape-to-robot export), scaled up from the real ~30 cm hobby arm so
- * it can service a useful chunk of the arena from one table-edge mount. It is
- * deliberately not arena-spanning: a folded rest pose only reads as "folded" if
- * the links are comparable to the robot it picks up.
+ * SO-101 arm geometry, in meters. Proportions follow the URDF joint chain while
+ * staying compact enough that the rescue demo does not dominate the arena.
  */
 export const ARM_LINK = {
-  pedestal: 0.1, // base plate + motor stack height, up to the waist axis
+  pedestal: 0.09, // base plate + motor stack height, up to the waist axis
   plate: 0.018, // mounting plate thickness
-  upperArm: 0.45, // shoulder joint -> elbow joint
-  lowerArm: 0.42, // elbow joint -> wrist joint
-  wrist: 0.15, // wrist joint -> gripper roll joint
-  gripper: 0.1, // gripper body, roll joint -> jaw pivot
-  jaw: 0.065, // finger length, visual only
+  shoulderRise: 0.1, // waist axis -> shoulder pitch axis (the vertical riser)
+  upperArm: 0.42, // shoulder joint -> elbow joint
+  lowerArm: 0.4, // elbow joint -> wrist joint
+  wrist: 0.09, // wrist joint -> gripper roll joint
+  gripper: 0.07, // gripper body, roll joint -> jaw pivot
+  jaw: 0.045, // finger length, visual only
 };
 
-/** Height of the shoulder/waist axis above the floor. */
-export const ARM_MOUNT_HEIGHT = ARM_LINK.pedestal + ARM_LINK.plate;
+/** Height of the shoulder pitch axis above the floor. */
+export const ARM_MOUNT_HEIGHT =
+  ARM_LINK.pedestal + ARM_LINK.plate + ARM_LINK.shoulderRise;
 
-/** Effective 2-link reach lengths used for IK: elbow bends once, wrist just levels the gripper. */
+/**
+ * Effective 2-link reach lengths used for IK. The wrist is held straight
+ * (wristPitch 0) while reaching so this rigid L2 length is exactly where the
+ * jaws end up, not just an approximation.
+ */
 export const ARM_REACH_L1 = ARM_LINK.upperArm;
-export const ARM_REACH_L2 = ARM_LINK.lowerArm + ARM_LINK.wrist + ARM_LINK.gripper;
+export const ARM_REACH_L2 =
+  ARM_LINK.lowerArm + ARM_LINK.wrist + ARM_LINK.gripper + ARM_LINK.jaw / 2;
 
 /** Furthest floor point the gripper can touch, measured from the mount. */
 export const ARM_MAX_REACH = ARM_REACH_L1 + ARM_REACH_L2 - 0.05;
 
-/** Joint limits copied from the URDF <limit> tags, radians. */
+/** Joint limits. Shoulder/elbow are widened past the URDF spec so the rest pose can fold a full 180 degrees. */
 export const ARM_LIMITS: Record<keyof ArmJointAngles, [number, number]> = {
   waist: [-1.91986, 1.91986],
-  shoulder: [-1.74533, 1.74533],
-  elbow: [-1.74533, 1.5708],
+  shoulder: [-Math.PI, Math.PI],
+  elbow: [-Math.PI, Math.PI],
   wristPitch: [-1.65806, 1.65806],
   wristRoll: [-2.74385, 2.84121],
   gripper: [-0.174533, 1.74533],
 };
 
 /**
- * Stowed pose. The URDF elbow only travels +90/-100 degrees, so the forearm
- * can't lie parallel against the upper arm; the tightest available tuck folds
- * it back over the base and curls the wrist down so the gripper parks beside
- * the pedestal instead of reaching out across the table.
+ * Stowed pose: the upper arm lies horizontal pointing away from the arena,
+ * then the elbow turns a full 180 degrees so the forearm lies horizontal
+ * pointing back the other way, over the arena.
  */
 export const ARM_REST_POSE: ArmJointAngles = {
   waist: 0,
-  shoulder: -1.3,
-  elbow: -1.74533,
-  wristPitch: -1.65806,
+  shoulder: Math.PI,
+  elbow: Math.PI,
+  wristPitch: 0,
   wristRoll: 0,
   gripper: 0.05,
 };
@@ -133,10 +136,10 @@ type ArmMount = ArmState["mount"];
 
 /**
  * 2-link planar IK: waist yaws to face the target, then shoulder/elbow solve
- * for the horizontal distance + height via the law of cosines (elbow bends
- * once; wristPitch afterward just levels the gripper). Since ARM_REACH_L1/L2
- * cover the whole arena, this reaches any (x, y, z) the mock or a real
- * controller asks for.
+ * for the horizontal distance + height via the law of cosines. wristPitch is
+ * held at 0 so the wrist+gripper stay a rigid extension of the forearm -
+ * that rigid length is exactly ARM_REACH_L2, so the jaws land on the target
+ * instead of drifting off it the way a "leveling" wrist bend would.
  */
 export function solveArmIK(
   mount: ArmMount,
@@ -155,14 +158,55 @@ export function solveArmIK(
   const d = Math.min(Math.max(raw, Math.abs(L1 - L2) + 0.01), L1 + L2 - 0.01);
 
   const cosElbow = clampRatio((L1 * L1 + L2 * L2 - d * d) / (2 * L1 * L2));
-  const elbow = -(Math.PI - Math.acos(cosElbow));
+  // the other elbow branch (positive, paired with a subtracted shoulder
+  // offset below) makes the elbow arc up and over on the way to a target,
+  // instead of dipping the whole upper arm down through the floor first
+  const elbow = Math.PI - Math.acos(cosElbow);
 
   const cosShoulderOffset = clampRatio((L1 * L1 + d * d - L2 * L2) / (2 * L1 * d));
-  const shoulder = Math.atan2(height, reachXY) + Math.acos(cosShoulderOffset);
+  // atan2 takes -height (not height): the render's dir() treats a negative
+  // pitch as "up", the opposite of the usual math convention, so the sign
+  // has to flip here or every reach would aim for the mirrored height.
+  const shoulder = Math.atan2(-height, reachXY) - Math.acos(cosShoulderOffset);
 
-  const wristPitch = -(shoulder + elbow);
+  return { waist, shoulder, elbow, wristPitch: 0 };
+}
 
-  return { waist, shoulder, elbow, wristPitch };
+/**
+ * Forward kinematics for the gripper tip, mirroring ArmModel's chain exactly
+ * (wrist+gripper continue straight past the forearm since wristRoll doesn't
+ * change pointing direction). Used to find where the gripper currently is so
+ * a reach can smoothly move it in a straight Cartesian line instead of
+ * interpolating joint angles, which can swing the tip through the floor.
+ */
+export function armTipPosition(
+  mount: ArmMount,
+  joints: Pick<ArmJointAngles, "waist" | "shoulder" | "elbow" | "wristPitch">,
+): Point & { z: number } {
+  const { waist, shoulder, elbow, wristPitch } = joints;
+  const forearmAbs = shoulder + elbow;
+  const wristAbs = forearmAbs + wristPitch;
+  const dir = (a: number): [number, number] => [Math.cos(a), -Math.sin(a)];
+
+  let lx = 0;
+  let lz = ARM_MOUNT_HEIGHT;
+  const [dx1, dz1] = dir(shoulder);
+  lx += ARM_LINK.upperArm * dx1;
+  lz += ARM_LINK.upperArm * dz1;
+  const [dx2, dz2] = dir(forearmAbs);
+  lx += ARM_LINK.lowerArm * dx2;
+  lz += ARM_LINK.lowerArm * dz2;
+  const [dx3, dz3] = dir(wristAbs);
+  const tail = ARM_LINK.wrist + ARM_LINK.gripper + ARM_LINK.jaw;
+  lx += tail * dx3;
+  lz += tail * dz3;
+
+  const totalYaw = mount.yaw + waist;
+  return {
+    x: mount.x + lx * Math.cos(totalYaw),
+    y: mount.y + lx * Math.sin(totalYaw),
+    z: lz,
+  };
 }
 
 function clampRatio(v: number) {
@@ -185,8 +229,11 @@ export function armTargetPoint(arm: ArmState, robots: Robot[]): Robot | undefine
   return robots.find((r) => r.id === arm.targetRobotId);
 }
 
-/** How high the carried robot rises off the floor, meters (visual only). */
-export const ARM_CARRY_LIFT_M = 0.06;
+/** How high the gripper hovers while carrying a robot over the map, meters. */
+export const ARM_CARRY_LIFT_M = 0.28;
+
+/** Transit height while reaching: swings over the arena before descending onto the target. */
+export const ARM_TRANSIT_HEIGHT_M = 0.32;
 
 const CARRY_MODES = new Set(["lifting", "carrying", "placing"]);
 

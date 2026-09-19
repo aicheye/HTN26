@@ -18,6 +18,7 @@ import {
   OBSTACLE_DANGER,
   TILE_M,
   ARM_CARRY_LIFT_M,
+  ARM_MAX_REACH,
   isCarried,
   isDanger,
   isWalking,
@@ -169,7 +170,8 @@ function CameraRig({
   const controls = useThree((s) => s.controls) as
     | { target: THREE.Vector3; addEventListener: Function; removeEventListener: Function }
     | null;
-  const span = Math.max(arena.width, arena.length);
+  // the arm is taller than the arena is wide, so frame for it too
+  const span = Math.max(arena.width, arena.length, ARM_MAX_REACH * 1.3);
   const desired = useRef<{ pos: THREE.Vector3; target: THREE.Vector3 } | null>(null);
 
   useEffect(() => {
