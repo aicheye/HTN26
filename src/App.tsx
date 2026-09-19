@@ -50,10 +50,10 @@ export default function App() {
 
       <aside
         className={`relative z-10 min-w-0 shrink-0 overflow-hidden border-r bg-zinc-900 shadow-[6px_0_24px_rgba(0,0,0,0.4)] transition-[width] duration-200 ${
-          section ? "w-80 border-zinc-800/60" : "w-0 border-transparent shadow-none"
+          section ? "w-64 border-zinc-800/60" : "w-0 border-transparent shadow-none"
         }`}
       >
-        <div className="flex h-full w-80 flex-col">
+        <div className="flex h-full w-64 flex-col">
           <div className="flex items-center justify-between border-b border-zinc-800/60 bg-zinc-900/95 px-4 py-2.5 backdrop-blur-sm">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
               {SECTIONS.find((s) => s.id === section)?.label}
@@ -153,7 +153,7 @@ export default function App() {
               onPickGoal={(p) => send("goto", { target: p })}
             />
 
-            <div className="absolute right-3 top-3 h-40 w-56 overflow-hidden rounded-lg border border-zinc-700/70 bg-zinc-900 shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
+            <div className="absolute right-3 top-3 h-40 w-56 overflow-hidden rounded-lg bg-zinc-900 shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
               <div className="pointer-events-none h-full w-full">
                 <MapView
                   renderer={pipView}
