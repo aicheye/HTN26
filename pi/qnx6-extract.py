@@ -6,6 +6,7 @@ itself. It only ever opens the device for reading.
 
     python3 pi/qnx6-extract.py /dev/sda3 ls /home/qnxuser/recordings
     python3 pi/qnx6-extract.py /dev/sda3 copy /home/qnxuser/recordings recordings
+    python3 pi/qnx6-extract.py /dev/sda3 copy /home/qnxuser/recordings/rec-005 recordings/rec-005
 
 The device must be readable: sudo chmod o+r /dev/sda3 (lasts until the card is unplugged).
 Layout follows the Linux kernel's fs/qnx6: an 8 KB boot block, a 4 KB superblock area, then the blocks.
@@ -158,13 +159,9 @@ def main():
             count = f"{sum(1 for _ in fs.list_dir(child))} entries" if is_dir else f"{child['tree'].size} bytes"
             print(f"  {name}{'/' if is_dir else ''}  {count}")
         return
-    for name, number in sorted(fs.list_dir(source)):
-        child = fs.inode(number)
-        if child["mode"] & S_IFMT != S_IFDIR:
-            continue
-        files, size = fs.copy(child, os.path.join(sys.argv[4], name))
-        print(f"  {name}: {files} files, {size / 1e6:.1f} MB")
-
+    # Copies the contents of the source directory into the target, like cp -r source/. target
+    files, size = fs.copy(source, sys.argv[4])
+    print(f"  {sys.argv[3]} -> {sys.argv[4]}: {files} files, {size / 1e6:.1f} MB")
 
 if __name__ == "__main__":
     main()
