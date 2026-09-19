@@ -30,7 +30,8 @@ HOST_FILE = Path(__file__).parent.parent / "pi" / "host"  # optional: the Pi's a
 PI_HOST = HOST_FILE.read_text().strip() if HOST_FILE.exists() else "qnxpi78.local"
 TRACKER = os.environ.get("TRACKER_URL", f"http://{PI_HOST}:8003")
 BRIDGE = os.environ.get("BRIDGE_URL", "http://localhost:8080")
-FRAMES, FETCH_INTERVAL_S, FETCH_WIDTH = 12, 0.5, 1152
+FRAMES, FETCH_INTERVAL_S, FETCH_WIDTH = 12, 0.3, 960
+WATCH_WINDOW_S = 4  # watch mode only uses frames this recent, so a moved object wins the vote within seconds
 SAME_OBJECT_CM = 4  # an object found within this distance of one from the previous scan keeps its id
 PAGE_FILE = Path(__file__).parent.parent / "pi" / "client" / "objects.json"  # read by the live page (pi/client/demo.html)
 
@@ -126,9 +127,9 @@ def send(obstacles):
     urllib.request.urlopen(request, timeout=5).read()
 
 
-def scan(frames, sam, previous):
+def scan(frames, sam, previous, memory=None):
     started = time.time()
-    objects, picture, _, view, masks = detect.detect(frames, tuple(frames[0][1]["floor"]), sam, return_masks=True)
+    objects, picture, _, view, masks = detect.detect(frames, tuple(frames[0][1]["floor"]), sam, return_masks=True, memory=memory)
     obstacles = to_obstacles(objects, masks, picture, view, frames[0][1], previous)
     publish_for_page(objects, obstacles, time.time() - started, len(frames))
     print(f"{len(obstacles)} objects from {len(frames)} frames in {time.time() - started:.1f} s: " + ", ".join(o["id"] for o in obstacles))
@@ -136,33 +137,40 @@ def scan(frames, sam, previous):
 
 
 def watch(sam):
-    """Keeps the newest frames in a window while a background thread fetches, and rescans as fast as it can."""
-    window = collections.deque(maxlen=FRAMES)
+    """A background thread fetches frames all the time. The loop rescans as fast as it can, using only the frames of
+    the last few seconds, and asks SAM only about what changed since the previous scan."""
+    window = collections.deque(maxlen=40)  # (arrival time, image, state)
 
     def fetch_forever():
         while True:
             try:
                 frame = fetch_frame()
                 if frame:
-                    window.append(frame)
+                    window.append((time.time(), *frame))
             except OSError as error:
-                print(f"tracker not reachable: {error}")
+                print(f"tracker not reachable: {error}", flush=True)
                 time.sleep(2)
             time.sleep(FETCH_INTERVAL_S)
 
     threading.Thread(target=fetch_forever, daemon=True).start()
-    previous = []
+    previous, memory, last_newest = [], {}, 0
     while True:
-        if len(window) < 4:
-            print("waiting for frames with 3 or more floor markers in view")
-            time.sleep(2)
+        recent = [entry for entry in list(window) if time.time() - entry[0] <= WATCH_WINDOW_S]
+        if len(recent) < 3 or recent[-1][0] == last_newest:
+            if not recent:
+                print("waiting for frames with 3 or more floor markers in view", flush=True)
+                time.sleep(1.5)
+            time.sleep(0.1)
             continue
-        previous, picture = scan(list(window), sam, previous)
+        last_newest = recent[-1][0]
+        rate = (len(recent) - 1) / max(recent[-1][0] - recent[0][0], 1e-6)
+        previous, picture = scan([(image, state) for _, image, state in recent[-FRAMES:]], sam, previous, memory)
+        print(f"  frames arrive at {rate:.1f} per second, newest is {time.time() - last_newest:.1f} s old", flush=True)
         cv2.imwrite("objects.jpg", picture)
         try:
             send(previous)
-        except OSError as error:
-            print(f"bridge not reachable: {error}")
+        except OSError:
+            pass  # the bridge is optional, the live page reads pi/client/objects.json
 
 
 def main():

@@ -206,8 +206,14 @@ NEAR_CM = 1.5              # a grid point is prompted when there is a hint of an
 MIN_SCORE = 0.88
 
 
-def sam_objects(picture, view, usable, colour_share, moving_edges, hinted, sam):
-    """Prompts SAM near every hint of an object and keeps the masks that the cues confirm. Returns (masks, scores)."""
+def sam_objects(picture, view, usable, colour_share, moving_edges, hinted, sam, memory=None):
+    """Prompts SAM near every hint of an object and keeps the masks that the cues confirm. Returns (masks, scores).
+
+    memory (a dict kept by the caller between scans) makes repeated scans cheap: the outline requests are most of the
+    cost, and most of the arena looks the same as in the previous scan. Masks whose area has not changed are carried
+    over, and SAM is only asked where the picture changed. Every 25th scan starts from scratch, so an object that
+    was missed once (for example while the camera stood still and gave no parallax) gets another chance.
+    """
     sam.set_image(picture)
     lab = cv2.cvtColor(cv2.GaussianBlur(picture, (0, 0), 1.5), cv2.COLOR_BGR2LAB).astype(np.float32)
     arena_area = float(usable.sum())
@@ -219,8 +225,22 @@ def sam_objects(picture, view, usable, colour_share, moving_edges, hinted, sam):
     step = int(GRID_CM * PX_PER_CM)
     points = [(x, y) for y in range(step // 2, usable.shape[0], step) for x in range(step // 2, usable.shape[1], step) if usable[y, x] and near[y, x]]
     points.sort(key=lambda p: -(colour_share[p[1], p[0]] + moving_edges[p[1], p[0]]))  # clearest objects claim their area first
-    # Asked in batches: once an object has its mask, the other grid points on it are skipped and cost nothing.
     kept, scores = [], {}
+    look = cv2.GaussianBlur(cv2.resize(lab[..., 0], None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA), (0, 0), 3)
+    if memory is not None:
+        memory["scans"] = memory.get("scans", 0) + 1
+        if "look" in memory and memory["scans"] % 25:
+            # Brightness change since the last scan, at 4 mm per pixel and blurred so that the few-millimetre shift
+            # of tall objects between camera positions does not count. Moving an object changes it by far more.
+            changed = cv2.dilate((cv2.absdiff(look, memory["look"]) > 22).astype(np.uint8), np.ones((7, 7), np.uint8))
+            changed = cv2.resize(changed, lab.shape[1::-1], interpolation=cv2.INTER_NEAREST) > 0
+            for mask, score in zip(memory["masks"], memory["scores"]):
+                if changed[mask > 0].mean() < 0.08:
+                    kept.append(mask)
+                    scores[id(mask)] = score
+            points = [(x, y) for x, y in points if changed[y, x] and not any(other[y, x] for other in kept)]
+        memory["look"] = look
+    # Asked in batches: once an object has its mask, the other grid points on it are skipped and cost nothing.
     batch = 2 * sam.workers
     while points:
         now, points = points[:batch], points[batch:]
@@ -228,6 +248,8 @@ def sam_objects(picture, view, usable, colour_share, moving_edges, hinted, sam):
             if not any(other[y, x] for other in kept):
                 kept, scores = consider(mask, score, x, y, kept, scores, usable, arena_area, lab, colour_share, moving_edges)
         points = [(x, y) for x, y in points if not any(other[y, x] for other in kept)]
+    if memory is not None:
+        memory["masks"], memory["scores"] = list(kept), [scores[id(mask)] for mask in kept]
     return kept, [round(scores[id(mask)], 2) for mask in kept]
 
 
@@ -256,7 +278,7 @@ def consider(mask, score, x, y, kept, scores, usable, arena_area, lab, colour_sh
     return kept, scores
 
 
-def detect(frames, floor=(63, 63), sam=None, return_masks=False):
+def detect(frames, floor=(63, 63), sam=None, return_masks=False, memory=None):
     """frames: list of (BGR image, tracker state). Returns (objects, top view image, mask)."""
     view = TopView(*floor)
     votes = np.zeros(view.size[::-1], np.float32)
@@ -302,7 +324,7 @@ def detect(frames, floor=(63, 63), sam=None, return_masks=False):
     if sam is not None:
         usable = enough & (views >= 0.9 * views.max())
         hinted = (share >= 0.5) | moving_edges | (hints / np.maximum(views, 1) >= 0.5)
-        pieces, piece_scores = sam_objects(picture, view, usable, share * enough, moving_edges.astype(np.float32), hinted & enough, sam)
+        pieces, piece_scores = sam_objects(picture, view, usable, share * enough, moving_edges.astype(np.float32), hinted & enough, sam, memory)
     else:  # without the model: blobs from the two cues, cut apart where that yields box shapes
         mean_lab = cv2.cvtColor(cv2.GaussianBlur(mean_top, (0, 0), 1.5), cv2.COLOR_BGR2LAB).astype(np.float32)
         count, labels, stats, _ = cv2.connectedComponentsWithStats(clean)
