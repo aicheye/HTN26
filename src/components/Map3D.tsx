@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
-import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Line, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import type { MapProps } from "./MapProps";
@@ -27,6 +27,8 @@ type Arena = WorldState["arena"];
 const DRAG_PX = 4; // pointer travel that still counts as a click, not an orbit
 const DRAG_MS = 300;
 
+type ViewMode = "free" | "top" | "iso" | "follow";
+
 /**
  * Three.js is Y-up but the schema is Z-up, so everything lives inside one group
  * rotated -90° about X. Inside it, position={[x, y, z]} and rotation-z={yaw} are
@@ -34,63 +36,188 @@ const DRAG_MS = 300;
  */
 export function Map3D({ state, showCameraLayer = false, onPickGoal }: MapProps) {
   const { width, length } = state.arena;
+  const [view, setView] = useState<ViewMode>("iso");
+  const robot = state.robots.find((r) => r.tracking) ?? state.robots[0];
 
   return (
-    <Canvas
-      shadows
-      dpr={[1, 2]}
-      camera={{
-        position: [width / 2, length * 0.85, length * 1.0],
-        fov: 45,
-        near: 0.05,
-        far: 60,
-      }}
-    >
-      <color attach="background" args={["#f8fafc"]} />
-      <hemisphereLight intensity={0.65} groundColor="#cbd5e1" />
-      <directionalLight
-        position={[width, 2.5, length]}
-        intensity={1.6}
-        castShadow
-        shadow-mapSize={[1024, 1024]}
-        shadow-camera-left={-3}
-        shadow-camera-right={3}
-        shadow-camera-top={3}
-        shadow-camera-bottom={-3}
-      />
+    <div className="relative h-full w-full">
+      <Canvas
+        shadows
+        dpr={[1, 2]}
+        camera={{
+          position: [width / 2, length * 0.85, length * 1.0],
+          fov: 45,
+          near: 0.05,
+          far: 60,
+        }}
+      >
+        <color attach="background" args={["#f8fafc"]} />
+        <hemisphereLight intensity={0.65} groundColor="#cbd5e1" />
+        <directionalLight
+          position={[width, 2.5, length]}
+          intensity={1.6}
+          castShadow
+          shadow-mapSize={[1024, 1024]}
+          shadow-camera-left={-3}
+          shadow-camera-right={3}
+          shadow-camera-top={3}
+          shadow-camera-bottom={-3}
+        />
 
-      <group rotation={[-Math.PI / 2, 0, 0]}>
-        <Ground arena={state.arena} dimmed={showCameraLayer} onPickGoal={onPickGoal} />
-        <CornerTags arena={state.arena} />
-        {state.obstacles.map((o) => (
-          <ObstacleMesh key={o.id} obstacle={o} danger={isDanger(o, state.robots)} />
-        ))}
-        {state.path && state.path.length > 1 && (
-          <Line
-            points={state.path.map((p) => [p.x, p.y, 0.01] as [number, number, number])}
-            color="#0f172a"
-            lineWidth={2}
-            dashed
-            dashSize={0.06}
-            gapSize={0.04}
-          />
-        )}
-        {state.goal && <GoalPin x={state.goal.x} y={state.goal.y} />}
-        {state.robots.map((r) => (
-          <RobotModel key={r.id} robot={r} />
-        ))}
-      </group>
+        <group rotation={[-Math.PI / 2, 0, 0]}>
+          <Ground arena={state.arena} dimmed={showCameraLayer} onPickGoal={onPickGoal} />
+          <CornerTags arena={state.arena} />
+          {state.obstacles.map((o) => (
+            <ObstacleMesh key={o.id} obstacle={o} danger={isDanger(o, state.robots)} />
+          ))}
+          {state.path && state.path.length > 1 && (
+            <Line
+              points={state.path.map((p) => [p.x, p.y, 0.01] as [number, number, number])}
+              color="#0f172a"
+              lineWidth={2}
+              dashed
+              dashSize={0.06}
+              gapSize={0.04}
+            />
+          )}
+          {state.goal && <GoalPin x={state.goal.x} y={state.goal.y} />}
+          {state.robots.map((r) => (
+            <RobotModel key={r.id} robot={r} />
+          ))}
+        </group>
 
-      <OrbitControls
-        makeDefault
-        enableDamping
-        target={[width / 2, 0, -length / 2]}
-        minDistance={0.35}
-        maxDistance={Math.max(width, length) * 3}
-        maxPolarAngle={Math.PI / 2 - 0.05}
-      />
-    </Canvas>
+        <OrbitControls
+          makeDefault
+          enableDamping
+          dampingFactor={0.1}
+          rotateSpeed={0.55}
+          panSpeed={0.7}
+          zoomSpeed={0.8}
+          zoomToCursor
+          screenSpacePanning={false}
+          target={[width / 2, 0, -length / 2]}
+          minDistance={0.3}
+          maxDistance={Math.max(width, length) * 2.2}
+          maxPolarAngle={Math.PI / 2 - 0.06}
+        />
+
+        <CameraRig
+          arena={state.arena}
+          robot={robot}
+          view={view}
+          onUserTakeOver={() => setView((v) => (v === "follow" ? v : "free"))}
+        />
+      </Canvas>
+
+      <div className="absolute left-3 top-3 flex gap-1 rounded-lg border border-zinc-200 bg-white/90 p-1 shadow-sm backdrop-blur">
+        {(
+          [
+            ["iso", "Reset"],
+            ["top", "Top"],
+            ["follow", "Follow"],
+          ] as [ViewMode, string][]
+        ).map(([mode, label]) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => setView(mode)}
+            className={`rounded px-2 py-1 text-xs font-medium transition ${
+              view === mode
+                ? "bg-zinc-900 text-white"
+                : "text-zinc-600 hover:bg-zinc-100"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
+}
+
+/**
+ * Keeps the camera usable: glides to view presets, follows the robot, and stops
+ * the target and camera from sliding under the floor or off the arena.
+ */
+function CameraRig({
+  arena,
+  robot,
+  view,
+  onUserTakeOver,
+}: {
+  arena: Arena;
+  robot: Robot | undefined;
+  view: ViewMode;
+  onUserTakeOver: () => void;
+}) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as
+    | { target: THREE.Vector3; addEventListener: Function; removeEventListener: Function }
+    | null;
+  const span = Math.max(arena.width, arena.length);
+  const desired = useRef<{ pos: THREE.Vector3; target: THREE.Vector3 } | null>(null);
+  const followOffset = useRef<THREE.Vector3 | null>(null);
+
+  useEffect(() => {
+    if (!controls) return;
+    const onStart = () => {
+      desired.current = null;
+      onUserTakeOver();
+    };
+    controls.addEventListener("start", onStart);
+    return () => controls.removeEventListener("start", onStart);
+  }, [controls, onUserTakeOver]);
+
+  useEffect(() => {
+    const center = new THREE.Vector3(arena.width / 2, 0, -arena.length / 2);
+    if (view === "top") {
+      desired.current = {
+        pos: new THREE.Vector3(center.x, span * 1.15, center.z + 0.001),
+        target: center,
+      };
+    } else if (view === "iso") {
+      desired.current = {
+        pos: new THREE.Vector3(center.x, span * 0.75, center.z + span * 1.0),
+        target: center,
+      };
+    } else {
+      desired.current = null;
+    }
+    followOffset.current = null;
+  }, [view, arena.width, arena.length, span]);
+
+  useFrame((_, dt) => {
+    if (!controls) return;
+    const k = 1 - Math.exp(-6 * dt);
+
+    if (view === "follow" && robot) {
+      const target = new THREE.Vector3(robot.x, 0, -robot.y);
+      if (!followOffset.current) {
+        followOffset.current = camera.position.clone().sub(controls.target);
+        if (followOffset.current.length() > span) {
+          followOffset.current.setLength(Math.min(span * 0.6, 1.2));
+        }
+      }
+      controls.target.lerp(target, k);
+      camera.position.lerp(target.clone().add(followOffset.current), k);
+    } else if (desired.current) {
+      camera.position.lerp(desired.current.pos, k);
+      controls.target.lerp(desired.current.target, k);
+      if (camera.position.distanceTo(desired.current.pos) < 0.01) desired.current = null;
+    }
+
+    // keep the orbit point on the floor and inside the arena
+    controls.target.x = clamp(controls.target.x, -0.2, arena.width + 0.2);
+    controls.target.z = clamp(controls.target.z, -arena.length - 0.2, 0.2);
+    controls.target.y = clamp(controls.target.y, 0, 0.25);
+    camera.position.y = Math.max(camera.position.y, 0.05);
+  });
+
+  return null;
+}
+
+function clamp(v: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, v));
 }
 
 function Ground({
@@ -329,39 +456,51 @@ function RobotModel({ robot }: { robot: Robot }) {
       <Eyes
         bodyL={dims.bodyL}
         bodyW={dims.bodyW}
-        z={legH + bodyH * 0.72}
+        bodyH={bodyH}
+        faceZ={legH + bodyH * 0.55}
         tracking={robot.tracking}
       />
     </group>
   );
 }
 
+/** The OLED face on the front of the shell, with two shallow eye domes. */
 function Eyes({
   bodyL,
   bodyW,
-  z,
+  bodyH,
+  faceZ,
   tracking,
 }: {
   bodyL: number;
   bodyW: number;
-  z: number;
+  bodyH: number;
+  faceZ: number;
   tracking: boolean;
 }) {
-  const r = bodyW * 0.16;
+  const r = bodyW * 0.17;
+  const white = tracking ? "#e8eef7" : "#cbd5e1";
+  const pupil = tracking ? "#0b1220" : "#94a3b8";
+
   return (
-    <>
+    <group position={[bodyL / 2, 0, faceZ]}>
+      <mesh position={[0.0008, 0, 0]}>
+        <boxGeometry args={[0.0016, bodyW * 0.8, bodyH * 0.68]} />
+        <meshStandardMaterial color="#1c2432" roughness={0.35} metalness={0.1} />
+      </mesh>
+
       {[-1, 1].map((side) => (
-        <group key={side} position={[bodyL * 0.24, side * bodyW * 0.22, z]}>
-          <mesh>
-            <sphereGeometry args={[r, 16, 16]} />
-            <meshStandardMaterial color="#ffffff" roughness={0.3} />
+        <group key={side} position={[0.0018, side * bodyW * 0.2, 0]}>
+          <mesh scale={[0.3, 1, 1]}>
+            <sphereGeometry args={[r, 20, 20]} />
+            <meshStandardMaterial color={white} roughness={0.3} />
           </mesh>
-          <mesh position={[r * 0.55, 0, r * 0.15]}>
-            <sphereGeometry args={[r * 0.5, 12, 12]} />
-            <meshStandardMaterial color={tracking ? "#0f172a" : "#94a3b8"} />
+          <mesh position={[r * 0.1, 0, r * 0.08]} scale={[0.3, 1, 1]}>
+            <sphereGeometry args={[r * 0.42, 16, 16]} />
+            <meshStandardMaterial color={pupil} roughness={0.25} />
           </mesh>
         </group>
       ))}
-    </>
+    </group>
   );
 }

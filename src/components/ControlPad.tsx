@@ -34,7 +34,16 @@ export function ControlPad() {
   };
 
   useEffect(() => {
+    // arrow keys also drive sliders and selects, so ignore keys aimed at a control
+    const typing = (t: EventTarget | null) =>
+      t instanceof HTMLElement &&
+      (t.tagName === "INPUT" ||
+        t.tagName === "SELECT" ||
+        t.tagName === "TEXTAREA" ||
+        t.isContentEditable);
+
     const onKeyDown = (e: KeyboardEvent) => {
+      if (typing(e.target)) return;
       const key = e.key.toLowerCase();
       if (key === " ") {
         e.preventDefault();
