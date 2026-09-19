@@ -105,7 +105,9 @@ def object_mask(top, view, state):
     arena = np.zeros(mask.shape, bool)
     arena[y0:y1, x0:x1] = True
     usable = seen & arena & (ignore == 0)
-    return mask & usable, usable, lab[..., 0]
+    # A weaker hint, used only to decide where to ask SAM: clearly brighter or darker than the board around it.
+    # It fires on cardboard and on shadows alike, so it never decides what is kept.
+    return mask & usable, usable, lab[..., 0], (np.abs(darker) > 40) & usable
 
 
 def white_balance(picture, view):
@@ -200,44 +202,58 @@ def split_blob(blob, lab, depth=0):
 
 
 GRID_CM = 3.5              # spacing of the prompt points
+NEAR_CM = 1.5              # a grid point is prompted when there is a hint of an object within this distance
 MIN_SCORE = 0.88
 
 
-def sam_objects(picture, view, usable, colour_share, moving_edges, sam):
-    """Prompts SAM on a grid and keeps the masks that the colour and parallax cues confirm. Returns a list of masks."""
+def sam_objects(picture, view, usable, colour_share, moving_edges, hinted, sam):
+    """Prompts SAM near every hint of an object and keeps the masks that the cues confirm. Returns (masks, scores)."""
     sam.set_image(picture)
     lab = cv2.cvtColor(cv2.GaussianBlur(picture, (0, 0), 1.5), cv2.COLOR_BGR2LAB).astype(np.float32)
     arena_area = float(usable.sum())
+    # The decoder costs about 22 ms per point however the calls are threaded (measured: 91 ms of CPU each, 12
+    # threads), so the number of points decides the speed. Most of a dense grid lands on bare board. Points are
+    # therefore only asked where something hints at an object nearby: colour, moving edges, or brightness.
+    reach = int(2 * NEAR_CM * PX_PER_CM) + 1
+    near = cv2.dilate(hinted.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach))) > 0
     step = int(GRID_CM * PX_PER_CM)
-    # Points the cues already flag come first, so real objects claim their area before the bare-board points run.
-    points = [(x, y) for y in range(step // 2, usable.shape[0], step) for x in range(step // 2, usable.shape[1], step) if usable[y, x]]
-    points.sort(key=lambda p: -(colour_share[p[1], p[0]] + moving_edges[p[1], p[0]]))
+    points = [(x, y) for y in range(step // 2, usable.shape[0], step) for x in range(step // 2, usable.shape[1], step) if usable[y, x] and near[y, x]]
+    points.sort(key=lambda p: -(colour_share[p[1], p[0]] + moving_edges[p[1], p[0]]))  # clearest objects claim their area first
+    # Asked in batches: once an object has its mask, the other grid points on it are skipped and cost nothing.
     kept, scores = [], {}
-    for x, y in points:
-        if any(mask[y, x] for mask in kept):
-            continue
-        mask, score = sam.mask_at([(x, y)])
-        area = float(mask.sum())
-        if score < MIN_SCORE or area < MIN_AREA_CM2 * PX_PER_CM ** 2 or area > 0.25 * arena_area or not mask[y, x]:
-            continue
-        scores[id(mask)] = score
-        if (mask & ~usable.astype(np.uint8)).sum() > 0.3 * area:      # mostly a floor marker, the robot, or outside
-            continue
-        # Evidence that this is an object and not a patch of board.
-        inside = mask > 0
-        border = cv2.morphologyEx(mask, cv2.MORPH_GRADIENT, np.ones((9, 9), np.uint8)) > 0
-        ring = (cv2.dilate(mask, np.ones((31, 31), np.uint8)) > 0) & ~(cv2.dilate(mask, np.ones((9, 9), np.uint8)) > 0) & usable
-        coloured = float(colour_share[inside].mean())
-        raised = float(moving_edges[border].mean())
-        contrast = float(np.linalg.norm(lab[inside].mean(axis=0) - lab[ring].mean(axis=0))) if ring.any() else 0.0
-        if not (coloured > 0.35 or raised > 0.25 or contrast > 22):
-            continue
-        # One object, one mask: drop parts of a whole. When the new mask is the whole, it replaces its parts.
-        if any((inside & (other > 0)).sum() > 0.8 * area for other in kept):
-            continue
-        kept = [other for other in kept if (inside & (other > 0)).sum() < 0.8 * other.sum()]
-        kept.append(mask)
+    batch = 2 * sam.workers
+    while points:
+        now, points = points[:batch], points[batch:]
+        for (x, y), (mask, score) in zip(now, sam.masks_at(now)):
+            if not any(other[y, x] for other in kept):
+                kept, scores = consider(mask, score, x, y, kept, scores, usable, arena_area, lab, colour_share, moving_edges)
+        points = [(x, y) for x, y in points if not any(other[y, x] for other in kept)]
     return kept, [round(scores[id(mask)], 2) for mask in kept]
+
+
+def consider(mask, score, x, y, kept, scores, usable, arena_area, lab, colour_share, moving_edges):
+    """Adds one SAM mask to the kept list when it is a new object. Returns the updated (kept, scores)."""
+    area = float(mask.sum())
+    if score < MIN_SCORE or area < MIN_AREA_CM2 * PX_PER_CM ** 2 or area > 0.25 * arena_area or not mask[y, x]:
+        return kept, scores
+    if (mask & ~usable.astype(np.uint8)).sum() > 0.3 * area:      # mostly a floor marker, the robot, or outside
+        return kept, scores
+    # Evidence that this is an object and not a patch of board.
+    inside = mask > 0
+    border = cv2.morphologyEx(mask, cv2.MORPH_GRADIENT, np.ones((9, 9), np.uint8)) > 0
+    ring = (cv2.dilate(mask, np.ones((31, 31), np.uint8)) > 0) & ~(cv2.dilate(mask, np.ones((9, 9), np.uint8)) > 0) & usable
+    coloured = float(colour_share[inside].mean())
+    raised = float(moving_edges[border].mean())
+    contrast = float(np.linalg.norm(lab[inside].mean(axis=0) - lab[ring].mean(axis=0))) if ring.any() else 0.0
+    if not (coloured > 0.35 or raised > 0.25 or contrast > 22):
+        return kept, scores
+    # One object, one mask: drop parts of a whole. When the new mask is the whole, it replaces its parts.
+    if any((inside & (other > 0)).sum() > 0.8 * area for other in kept):
+        return kept, scores
+    kept = [other for other in kept if (inside & (other > 0)).sum() < 0.8 * other.sum()]
+    kept.append(mask)
+    scores[id(mask)] = score
+    return kept, scores
 
 
 def detect(frames, floor=(63, 63), sam=None, return_masks=False):
@@ -247,9 +263,11 @@ def detect(frames, floor=(63, 63), sam=None, return_masks=False):
     views = np.zeros(view.size[::-1], np.float32)
     colour = np.zeros((*view.size[::-1], 3), np.float32)
     brightness = []
+    hints = np.zeros(view.size[::-1], np.float32)
     for image, state in frames:
         top = view.warp(image, state["camera"])
-        mask, seen, L = object_mask(top, view, state)
+        mask, seen, L, hint = object_mask(top, view, state)
+        hints += hint
         votes += mask
         views += seen
         colour += top * seen[..., None]
@@ -283,7 +301,8 @@ def detect(frames, floor=(63, 63), sam=None, return_masks=False):
     clean = cv2.morphologyEx(objects_mask.astype(np.uint8), cv2.MORPH_OPEN, np.ones((13, 13), np.uint8))
     if sam is not None:
         usable = enough & (views >= 0.9 * views.max())
-        pieces, piece_scores = sam_objects(picture, view, usable, share * enough, moving_edges.astype(np.float32), sam)
+        hinted = (share >= 0.5) | moving_edges | (hints / np.maximum(views, 1) >= 0.5)
+        pieces, piece_scores = sam_objects(picture, view, usable, share * enough, moving_edges.astype(np.float32), hinted & enough, sam)
     else:  # without the model: blobs from the two cues, cut apart where that yields box shapes
         mean_lab = cv2.cvtColor(cv2.GaussianBlur(mean_top, (0, 0), 1.5), cv2.COLOR_BGR2LAB).astype(np.float32)
         count, labels, stats, _ = cv2.connectedComponentsWithStats(clean)
