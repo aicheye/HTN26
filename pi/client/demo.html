@@ -1,40 +1,84 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>Tracker demo</title>
-<!-- Reference client for pi/API.md. Open over http (not https) while on the Sesame-Controller WiFi:
-       cd pi/client && python3 -m http.server 5500   then   http://localhost:5500/demo.html?host=qnxpi78.local&unit=3 -->
+<title>Tracker live</title>
+<!-- Live view of the Pi tracker: camera image with detections, top-down map, headline numbers, and everything
+     the tracker prints. Open over http (not https) while on the Sesame-Controller WiFi:
+       cd pi/client && python3 -m http.server 5500   then   http://localhost:5500/demo.html
+     Options: ?host=qnxpi78.local&unit=3&w=640&fps=4   (image width and rate. The robot's access point is slow
+     and also carries the robot's commands, so keep these modest.) -->
 <style>
   body { font-family: sans-serif; margin: 12px; background: #111; color: #ddd; }
-  .row { display: flex; gap: 12px; flex-wrap: wrap; }
-  .view { position: relative; width: 960px; max-width: 100%; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+  .view { position: relative; width: 800px; max-width: 100%; background: #222; min-height: 120px; }
   .view img, .view canvas { width: 100%; display: block; }
   .view canvas { position: absolute; left: 0; top: 0; }
-  #map { background: #222; width: 380px; height: 300px; }
-  pre { font-size: 12px; white-space: pre-wrap; }
+  #map { background: #222; width: 360px; height: 360px; }
+  #numbers { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 16px; margin: 8px 0; font-size: 14px; }
+  #numbers b { font-size: 20px; display: block; }
+  .ok { color: #4f4; } .bad { color: #f66; }
+  #log { background: #000; color: #9c9; font: 12px/1.35 monospace; height: 260px; overflow-y: auto; padding: 6px; margin-top: 12px; white-space: pre-wrap; word-break: break-all; }
 </style>
 <div class="row">
-  <div class="view"><img id="frame"><canvas id="overlay"></canvas></div>
-  <div><canvas id="map" width="380" height="300"></canvas><pre id="status">connecting</pre></div>
+  <div class="view"><img id="frame" alt=""><canvas id="overlay"></canvas></div>
+  <div>
+    <canvas id="map" width="360" height="360"></canvas>
+    <div id="numbers"></div>
+  </div>
 </div>
+<div id="log"></div>
 <script type="module">
 import { pixelToFloor } from "./floor.js";
 const query = new URLSearchParams(location.search);
 const base = `http://${query.get("host") ?? "qnxpi78.local"}:${8000 + Number(query.get("unit") ?? 3)}`;
+const imageWidth = Number(query.get("w") ?? 640), frameInterval = 1000 / Number(query.get("fps") ?? 4);
 const frame = document.getElementById("frame"), overlay = document.getElementById("overlay"), map = document.getElementById("map");
+const log = document.getElementById("log"), numbers = document.getElementById("numbers");
 
-// Objects come from the detector, not from the Pi. Boxes are in full-frame pixels: [left, top, right, bottom].
-// Call setObjects([...]) from the console, or replace this with your own source.
+// Objects come from the detector, not from the Pi. Boxes are full-frame pixels: [left, top, right, bottom].
 let objects = [];
 window.setObjects = (list) => { objects = list; };
 
-setInterval(() => { frame.src = `${base}/annotated.jpg?w=960&t=${Date.now()}`;  // detected markers are outlined, which helps with aiming }, 500);
+// Camera image: request the next frame only after the previous one arrived, so a slow link is never flooded.
+let requestedAt = 0;
+function nextFrame() {
+  requestedAt = Date.now();
+  frame.src = `${base}/annotated.jpg?w=${imageWidth}&t=${requestedAt}`;
+}
+frame.onload = frame.onerror = () => setTimeout(nextFrame, Math.max(0, frameInterval - (Date.now() - requestedAt)));
+nextFrame();
 
-new EventSource(`${base}/events`).onmessage = (event) => {
+function addLog(text, colour) {
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  const line = document.createElement("div");
+  line.textContent = `${new Date().toLocaleTimeString()}  ${text}`;
+  if (colour) line.style.color = colour;
+  log.append(line);
+  while (log.childElementCount > 300) log.firstChild.remove();
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+let lastStateAt = 0;
+const events = new EventSource(`${base}/events`);
+events.onopen = () => addLog(`connected to ${base}`, "#6cf");
+events.onerror = () => addLog("connection to the tracker lost, retrying", "#f66");
+events.addEventListener("log", (event) => addLog(event.data));  // every line the tracker prints
+setInterval(() => { if (Date.now() - lastStateAt > 1500) numbers.innerHTML = `<div class="bad"><b>no data</b>is the tracker running?</div>`; }, 1000);
+
+events.onmessage = (event) => {
   const state = JSON.parse(event.data);
-  const [frameW, frameH] = state.frame, [floorW, floorH] = state.floor;
-  document.getElementById("status").textContent = JSON.stringify({ ...state, camera: undefined }, null, 1);
+  lastStateAt = Date.now();
+  const [frameW] = state.frame, [floorW, floorH] = state.floor;
+  const cell = (value, label, good) => `<div class="${good === undefined ? "" : good ? "ok" : "bad"}"><b>${value}</b>${label}</div>`;
+  const pose = (p) => (p?.x === undefined ? "not seen" : `${p.x.toFixed(1)}, ${p.y.toFixed(1)} cm`);
+  numbers.innerHTML =
+    cell(state.calibrated ? `${state.cameraHeight} cm` : "unknown", "camera height", state.calibrated) +
+    cell(`${state.learned} of 4`, "floor markers learned", state.learned === 4) +
+    cell(state.floorMarkers, "used this frame", state.floorMarkers > 0) +
+    cell(pose(state.robot), state.robot?.x === undefined ? "robot" : `robot, heading ${state.robot.heading.toFixed(0)}, height ${state.robot.z.toFixed(1)}`, state.robot?.x !== undefined) +
+    cell(pose(state.arm), "arm base", state.arm?.x !== undefined) +
+    cell(`${state.fps} fps`, `markers in view: ${state.markers.join(" ") || "none"}`);
 
-  // Camera view: everything is drawn in full-frame pixels, scaled to the canvas.
+  // Camera view: drawn in full-frame pixels, scaled to the displayed image.
   overlay.width = frame.clientWidth; overlay.height = frame.clientHeight;
   const g = overlay.getContext("2d"), k = overlay.width / frameW;
   g.lineWidth = 2; g.font = "14px sans-serif";
@@ -45,32 +89,34 @@ new EventSource(`${base}/events`).onmessage = (event) => {
     g.fillText(o.label, l * k, t * k - 4);
   }
   for (const [name, colour] of [["robot", "#4cf"], ["arm", "#f6c"]]) {
-    const pose = state[name];
-    if (!pose) continue;
+    const p = state[name];
+    if (!p) continue;
     g.strokeStyle = g.fillStyle = colour;
-    g.beginPath(); g.arc(pose.px[0] * k, pose.px[1] * k, 10, 0, 7); g.stroke();
-    g.fillText(name, pose.px[0] * k + 14, pose.px[1] * k);
+    g.beginPath(); g.arc(p.px[0] * k, p.px[1] * k, 12, 0, 7); g.stroke();
+    g.fillText(name, p.px[0] * k + 16, p.px[1] * k);
   }
 
-  // Top-down map in floor centimetres. Needs a calibrated frame.
+  // Top-down map in floor centimetres. y is drawn upward. Mirrored layouts (zUp false) are flipped to match the frontend.
   const m = map.getContext("2d"), pad = 30, s = Math.min((map.width - 2 * pad) / floorW, (map.height - 2 * pad) / floorH);
-  const at = (x, y) => [pad + x * s, pad + y * s];
+  const at = (x, y) => [pad + x * s, map.height - pad - (state.zUp === false ? floorH - y : y) * s];
   m.clearRect(0, 0, map.width, map.height);
-  m.strokeStyle = "#666"; m.strokeRect(pad, pad, floorW * s, floorH * s);
+  m.strokeStyle = "#666"; m.strokeRect(pad, map.height - pad - floorH * s, floorW * s, floorH * s);
+  m.fillStyle = "#888"; m.font = "12px sans-serif";
+  [[0, 0, "1"], [floorW, 0, "2"], [floorW, floorH, "3"], [0, floorH, "4"]].forEach(([x, y, label]) => m.fillText(label, at(x, y)[0] - 3, at(x, y)[1] + 4));
   if (!state.calibrated) return;
   for (const o of objects) {
-    const [l, t, r, b] = o.box, p = pixelToFloor(state.camera, (l + r) / 2, (t + b) / 2);
+    const [l, t, r, b] = o.box, p = pixelToFloor(state.camera, (l + r) / 2, (t + b) / 2), [x, y] = at(p.x, p.y);
     m.fillStyle = o.target ? "#4f4" : "#fa0";
-    m.fillRect(...at(p.x, p.y).map((n) => n - 5), 10, 10);
-    m.fillText(o.label, at(p.x, p.y)[0] + 8, at(p.x, p.y)[1]);
+    m.fillRect(x - 5, y - 5, 10, 10);
+    m.fillText(o.label, x + 8, y);
   }
   for (const [name, colour] of [["robot", "#4cf"], ["arm", "#f6c"]]) {
-    const pose = state[name];
-    if (!pose) continue;
-    const [x, y] = at(pose.x, pose.y), a = (pose.heading * Math.PI) / 180;
+    const p = state[name];
+    if (p?.x === undefined) continue;
+    const [x, y] = at(p.x, p.y), a = ((state.zUp === false ? -p.heading : p.heading) * Math.PI) / 180;
     m.strokeStyle = m.fillStyle = colour;
-    m.beginPath(); m.arc(x, y, 8, 0, 7); m.moveTo(x, y); m.lineTo(x + 18 * Math.cos(a), y + 18 * Math.sin(a)); m.stroke();
-    m.fillText(name, x + 12, y - 10);
+    m.beginPath(); m.arc(x, y, 8, 0, 7); m.moveTo(x, y); m.lineTo(x + 20 * Math.cos(a), y - 20 * Math.sin(a)); m.stroke();
+    m.fillText(name, x + 12, y - 12);
   }
 };
 </script>

@@ -44,11 +44,13 @@
 #include <cmath>
 #include <condition_variable>
 #include <csignal>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "lens.h"
@@ -78,6 +80,27 @@ static void onFrame(camera_handle_t, camera_buffer_t* buf, void*) {
 }
 
 static void onStatus(camera_handle_t, camera_devstatus_t, uint16_t, void*) {}
+
+// Everything the tracker prints also goes to web clients: /events sends each line as a "log" event, and a
+// client that connects later first receives the recent lines.
+static std::vector<std::string> recentLog, unsentLog;
+
+static void say(const char* format, ...) {
+  char text[900];
+  va_list args;
+  va_start(args, format);
+  std::vsnprintf(text, sizeof(text), format, args);
+  va_end(args);
+  std::string line(text);
+  while (!line.empty() && line.back() == '\n') line.pop_back();
+  std::printf("%s\n", line.c_str());
+  std::fflush(stdout);
+  recentLog.push_back(line);
+  if (recentLog.size() > 40) recentLog.erase(recentLog.begin());
+  unsentLog.push_back(line);
+}
+
+static std::string logEvent(const std::string& line) { return "event: log\ndata: " + line + "\n\n"; }
 
 static int listenOn(int port) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -117,6 +140,10 @@ static int handleHttp(int fd, const cv::Mat& gray, const cv::Mat& uv, const std:
   if (path.find("GET /events") == 0) {
     std::string header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n" + common + "Connection: keep-alive\r\n\r\n";
     sendAll(fd, header.data(), header.size());
+    for (const std::string& line : recentLog) {
+      std::string event = logEvent(line);
+      sendAll(fd, event.data(), event.size());
+    }
     fcntl(fd, F_SETFL, O_NONBLOCK);  // a slow browser must not stall the tracker
     return fd;
   }
@@ -139,9 +166,13 @@ static int handleHttp(int fd, const cv::Mat& gray, const cv::Mat& uv, const std:
   }
   std::string header = body.empty() ? "HTTP/1.1 404 Not Found\r\n" : "HTTP/1.1 200 OK\r\nContent-Type: " + type + "\r\n";
   header += common + "Content-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n";
-  sendAll(fd, header.data(), header.size());
-  sendAll(fd, body.data(), body.size());
-  close(fd);
+  // The robot's access point is slow, and a frame can take a large part of a second to send. Sending from
+  // its own thread keeps that from pausing the tracker.
+  std::thread([fd, header, body] {
+    sendAll(fd, header.data(), header.size());
+    sendAll(fd, body.data(), body.size());
+    close(fd);
+  }).detach();
   return -1;
 }
 
@@ -189,7 +220,7 @@ int main(int argc, char** argv) {
     char* end = nullptr;
     long value = std::strtol(argv[4], &end, 10);
     if (*end != '\0' || value < 0 || value > 1023) {
-      std::printf("lens code must be a number from 0 to 1023, got \"%s\"\n", argv[4]);
+      say("lens code must be a number from 0 to 1023, got \"%s\"\n", argv[4]);
       return 1;
     }
     lensCode = (int)value;
@@ -199,7 +230,7 @@ int main(int argc, char** argv) {
 
   int server = listenOn(port), httpServer = listenOn(8000 + unit);
   if (server < 0 || httpServer < 0) {
-    std::printf("cannot listen on ports %d and %d\n", port, 8000 + unit);
+    say("cannot listen on ports %d and %d\n", port, 8000 + unit);
     return 2;
   }
   std::vector<int> clients, eventClients;
@@ -207,21 +238,21 @@ int main(int argc, char** argv) {
   camera_handle_t handle = CAMERA_HANDLE_INVALID;
   camera_error_t err = camera_open((camera_unit_t)unit, CAMERA_MODE_RO, &handle);
   if (err != CAMERA_EOK) {
-    std::printf("unit %d: camera_open failed, error %d\n", unit, (int)err);
+    say("unit %d: camera_open failed, error %d\n", unit, (int)err);
     return 3;
   }
   camera_set_vf_property(handle, CAMERA_IMGPROP_CREATEWINDOW, 0);
   err = camera_start_viewfinder(handle, onFrame, onStatus, nullptr);
   if (err != CAMERA_EOK) {
-    std::printf("unit %d: camera_start_viewfinder failed, error %d\n", unit, (int)err);
+    say("unit %d: camera_start_viewfinder failed, error %d\n", unit, (int)err);
     return 4;
   }
-  std::printf("unit %d: poses on TCP port %d, frames on http port %d, floor %.0f x %.0f cm\n", unit, port, 8000 + unit,
+  say("unit %d: poses on TCP port %d, frames on http port %d, floor %.0f x %.0f cm\n", unit, port, 8000 + unit,
               floorW, floorH);
 
   if (lensCode >= 0) {
     int error = lensApproach(unit, lensCode);
-    std::printf("lens code %d on %s: %s\n", lensCode, lensBusForUnit(unit), error ? std::strerror(error) : "set");
+    say("lens code %d on %s: %s\n", lensCode, lensBusForUnit(unit), error ? std::strerror(error) : "set");
   }
 
   cv::aruco::ArucoDetector detector(cv::aruco::getPredefinedDictionary(cv::aruco::DICT_4X4_50));
@@ -251,7 +282,7 @@ int main(int argc, char** argv) {
     {
       std::unique_lock<std::mutex> lock(frameMutex);
       if (!frameReady.wait_for(lock, std::chrono::seconds(2), [] { return !latestGray.empty(); })) {
-        std::printf("no frames for 2 s\n");
+        say("no frames for 2 s\n");
         continue;
       }
       gray = latestGray;
@@ -328,7 +359,7 @@ int main(int argc, char** argv) {
         floorX(-1, &clockwise);
         if (std::abs(counterClockwise - clockwise) > 0.2) {
           handedness = counterClockwise > clockwise ? 1 : -1;
-          std::printf("floor markers 1, 2, 3, 4 run %s seen from above\n", handedness > 0 ? "counter-clockwise" : "clockwise");
+          say("floor markers 1, 2, 3, 4 run %s seen from above\n", handedness > 0 ? "counter-clockwise" : "clockwise");
         }
       }
       if (handedness != 0) {
@@ -344,7 +375,7 @@ int main(int argc, char** argv) {
             for (int k = 0; k < 4; k++) {
               floorMarkerCorners[m.id].push_back({(float)(cornerSum[m.id][k].x / SAMPLES_NEEDED), (float)(cornerSum[m.id][k].y / SAMPLES_NEEDED), 0});
             }
-            std::printf("floor marker %d learned\n", m.id);
+            say("floor marker %d learned\n", m.id);
           }
         }
       }
@@ -401,16 +432,15 @@ int main(int argc, char** argv) {
       if (ids[i] == ARM_BASE_ID) arm = poseJson(corners[i]);
     }
 
+    int learnedCount = 0;
+    for (int id = 1; id <= 4; id++) learnedCount += !floorMarkerCorners[id].empty();
     framesSinceReport++;
     if (now - lastReport >= std::chrono::seconds(1)) {
       fps = framesSinceReport / std::chrono::duration<float>(now - lastReport).count();
       framesSinceReport = 0;
       lastReport = now;
-      int learned = 0;
-      for (int id = 1; id <= 4; id++) learned += !floorMarkerCorners[id].empty();
-      std::printf("%.1f fps, camera height %.0f cm, floor markers: %d learned, %d used this frame, markers [%s], robot %s, arm %s\n", fps,
-                  cam.valid ? std::abs(cam.C[2]) : -1.0, learned, floorMarkersSeen, idList.c_str(), robot.c_str(), arm.c_str());
-      std::fflush(stdout);
+      say("%.1f fps, camera height %.0f cm, floor markers: %d learned, %d used this frame, markers [%s], robot %s, arm %s\n", fps,
+                  cam.valid ? std::abs(cam.C[2]) : -1.0, learnedCount, floorMarkersSeen, idList.c_str(), robot.c_str(), arm.c_str());
     }
 
     // Pinhole camera for this frame: pixel = K * (R * floorPoint + tvec), with R = Rodrigues(rvec).
@@ -425,7 +455,7 @@ int main(int argc, char** argv) {
 
     long ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
     std::string line = "{\"t\":" + std::to_string(ms) + ",\"calibrated\":" + (cam.valid ? "true" : "false") +
-                       ",\"frame\":[" + std::to_string(gray.cols) + "," + std::to_string(gray.rows) + "],\"floor\":[" + std::to_string((int)floorW) + "," + std::to_string((int)floorH) + "],\"zUp\":" + (cam.valid && cam.C[2] < 0 ? "false" : "true") + ",\"floorMarkers\":" + std::to_string(floorMarkersSeen) + ",\"fps\":" + std::to_string((int)std::lround(fps)) + ",\"markers\":[" + idList +
+                       ",\"frame\":[" + std::to_string(gray.cols) + "," + std::to_string(gray.rows) + "],\"floor\":[" + std::to_string((int)floorW) + "," + std::to_string((int)floorH) + "],\"zUp\":" + (cam.valid && cam.C[2] < 0 ? "false" : "true") + ",\"learned\":" + std::to_string(learnedCount) + ",\"cameraHeight\":" + std::to_string(cam.valid ? (int)std::lround(std::abs(cam.C[2])) : -1) + ",\"floorMarkers\":" + std::to_string(floorMarkersSeen) + ",\"fps\":" + std::to_string((int)std::lround(fps)) + ",\"markers\":[" + idList +
                        "],\"robot\":" + robot + ",\"arm\":" + arm + ",\"camera\":" + cameraJson + "}\n";
 
     int fd;
@@ -436,6 +466,8 @@ int main(int argc, char** argv) {
     while ((fd = accept(server, nullptr, nullptr)) >= 0) clients.push_back(fd);
     broadcast(clients, line);
     broadcast(eventClients, "data: " + line + "\n");  // line already ends with a newline, which completes the event
+    for (const std::string& text : unsentLog) broadcast(eventClients, logEvent(text));
+    unsentLog.clear();
 
     // Colour snapshot with detections drawn, for checking the camera aim and the markers.
     if (now - lastSnapshot >= std::chrono::seconds(5)) {

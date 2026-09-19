@@ -11,6 +11,7 @@ debugging.
 | What | Where |
 |---|---|
 | State, pushed once per frame (about 15 per second) | `http://qnxpi78.local:8003/events` (server-sent events, use `EventSource`) |
+| Every line the tracker prints, as `log` events on the same stream (`source.addEventListener("log", ...)`). A new client first receives the last 40 lines | same `/events` URL |
 | State, once | `http://qnxpi78.local:8003/state.json` |
 | Camera frame | `http://qnxpi78.local:8003/frame.jpg?w=960` (`w` is optional, full size is 2304x1296) |
 | Camera frame with markers drawn | `http://qnxpi78.local:8003/annotated.jpg` |
@@ -30,6 +31,8 @@ Poll `/frame.jpg` at about 2 per second. Each request pauses tracking for the ti
   "frame": [2304, 1296],
   "floor": [76, 60],
   "zUp": true,
+  "learned": 4,
+  "cameraHeight": 131,
   "floorMarkers": 4,
   "fps": 15,
   "markers": [0, 1, 2, 3, 4, 5],
@@ -43,6 +46,7 @@ Poll `/frame.jpg` at about 2 per second. Each request pauses tracking for the ti
 - `frame`: size in pixels of the full camera frame. **All pixel values in this API are in full-frame pixels**,
   also when the image was fetched with `?w=`. Multiply by `displayed width / frame[0]` to draw on a scaled image.
 - `floor`: width and height in cm of the rectangle between floor markers 1 to 4.
+- `learned`: how many of the four floor markers the tracker has learned so far. `cameraHeight` is in cm, -1 when unknown.
 - `calibrated`: true when this frame's camera position over the floor is known. It needs at least one floor
   marker in view. `floorMarkers` is how many were used, more is steadier.
 - `robot`, `arm`: `null` when that marker is not visible. `x`, `y`, `z` are cm, `heading` is degrees.
