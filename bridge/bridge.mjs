@@ -4,10 +4,14 @@
 // It reads poses from the Pi tracker (TCP, centimetres and degrees), talks to the robot firmware
 // (WebSocket), and serves ws://localhost:8080/ws with WorldState in metres and radians.
 // The object detector posts its boxes to POST http://localhost:8080/objects.
+// goto is handled by navigator.mjs: path planning around obstacles, walking control, stuck recovery.
+// POST /calibrate measures the robot's real walking and turning with the camera and saves motion.json.
+import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import { WebSocketServer } from "ws";
 import { pixelToFloor } from "../pi/client/floor.js";
+import { Navigator } from "./navigator.mjs";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const TRACKER_HOST = process.env.TRACKER_HOST ?? "qnxpi78.local";
@@ -18,8 +22,7 @@ const ROBOT_TAG = 0, ARM_TAG = 5, CORNER_TAGS = [1, 2, 3, 4];
 const ROBOT_FOOTPRINT = { width: 0.105, length: 0.125 };  // metres, from the frontend's sample state
 const ARM_BASE_RADIUS = 0.09;                             // metres, estimate of the SO-101 base
 const TRACKING_TIMEOUT_MS = 500;
-const GOAL_REACHED_M = 0.06;
-const TURN_THRESHOLD_RAD = 0.45;  // turn in place while the heading error is larger than this
+const MOTION_FILE = new URL("./motion.json", import.meta.url);
 const MOVES = ["forward", "backward", "left", "right"];
 
 let tracker = null;        // latest tracker message
@@ -29,9 +32,11 @@ let robotSocket = null;
 let lastRobot = null;      // last known robot pose in the frontend's frame, with lastSeen
 let lastArm = null;
 let cvObstacles = [];      // from the detector, already in metres
-let goal = null;
-let drive = "";            // last movement command sent by the goto controller
+let manualObstacles = [];  // posted directly in metres, for example from the frontend or the simulator
 let seq = 0;
+
+const savedMotion = fs.existsSync(MOTION_FILE) ? JSON.parse(fs.readFileSync(MOTION_FILE, "utf8")) : {};
+const navigator = new Navigator((command) => sendToRobot({ command }), savedMotion);
 
 // Tracker frame: centimetres, origin at floor marker 1, x toward marker 2, y toward marker 4.
 // Frontend frame: metres, +y up the screen, yaw counter-clockwise seen from above. When the markers
@@ -102,31 +107,10 @@ function buildState() {
     arena: { width: (tracker?.floor[0] ?? 0) / 100, length: (tracker?.floor[1] ?? 0) / 100, cornerTagIds: CORNER_TAGS },
     calibration: { ok: Boolean(fresh) },
     robots: robot ? [robot] : [],
-    obstacles: [...(arm ? [arm] : []), ...cvObstacles],
-    ...(goal ? { goal, path: robot ? [{ x: robot.x, y: robot.y }, goal] : [goal] } : {}),
+    obstacles: [...(arm ? [arm] : []), ...cvObstacles, ...manualObstacles],
+    ...(navigator.goal ? { goal: navigator.goal, path: robot ? [{ x: robot.x, y: robot.y }, ...navigator.path] : navigator.path } : {}),
+    mission: navigator.status(),  // not part of the frontend schema: navigation state for display and debugging
   };
-}
-
-// Drives toward the goal with the firmware's continuous gaits: turn in place until roughly facing
-// the goal, then walk forward. Stops when the goal is reached or the robot has not been seen for a while.
-function stepGoto(state) {
-  if (!goal) return;
-  const robot = state.robots[0];
-  let want = "stop";
-  if (robot?.tracking) {
-    const dx = goal.x - robot.x, dy = goal.y - robot.y;
-    if (Math.hypot(dx, dy) < GOAL_REACHED_M) {
-      goal = null;
-    } else {
-      const error = Math.atan2(Math.sin(Math.atan2(dy, dx) - robot.yaw), Math.cos(Math.atan2(dy, dx) - robot.yaw));
-      want = Math.abs(error) > TURN_THRESHOLD_RAD ? (error > 0 ? "left" : "right") : "forward";
-    }
-  }
-  if (want !== drive) {
-    sendToRobot({ command: want });
-    drive = want;
-  }
-  if (!goal) drive = "";
 }
 
 function handleCommand(command) {
@@ -135,12 +119,10 @@ function handleCommand(command) {
   let sent;
   if (command.type === "goto") {
     if (!command.target) return ack(false, "goto needs a target");
-    goal = command.target;
-    drive = "";
+    navigator.start(command.target);
     return ack(true);
   }
-  goal = null;  // any manual command cancels a goto
-  drive = "";
+  navigator.cancel();  // any manual command cancels a goto
   if (MOVES.includes(command.type)) sent = sendToRobot({ command: command.type, ...face });
   else if (command.type === "stop") sent = sendToRobot({ command: "stop" });
   else if (command.type === "pose") sent = command.pose ? sendToRobot({ command: command.pose, ...face }) : null;
@@ -181,11 +163,22 @@ const server = http.createServer((request, response) => {
   if (request.method === "OPTIONS") return reply(204, {});
   if (request.url === "/state") return reply(200, buildState());
   if (request.url === "/objects" && request.method === "GET") return reply(200, cvObstacles);
-  if (request.url === "/objects" && request.method === "POST") {
+  if (request.url === "/calibrate" && request.method === "POST") {
+    navigator.calibrate().then((motion) => {
+      fs.writeFileSync(MOTION_FILE, JSON.stringify(navigator.motion, null, 2) + "\n");
+      reply(200, motion);
+    }, (error) => reply(409, { error: error.message }));
+    return;
+  }
+  if ((request.url === "/objects" || request.url === "/obstacles") && request.method === "POST") {
     let text = "";
     request.on("data", (chunk) => { text += chunk; });
     request.on("end", () => {
-      try { reply(200, setObjects(JSON.parse(text))); } catch (error) { reply(400, { error: error.message }); }
+      try {
+        // /obstacles takes a list of obstacles in the frontend's own format (metres) and replaces the manual ones.
+        if (request.url === "/obstacles") reply(200, (manualObstacles = JSON.parse(text).map((o, i) => ({ id: `manual-${i + 1}`, source: "manual", yaw: 0, ...o }))));
+        else reply(200, setObjects(JSON.parse(text)));
+      } catch (error) { reply(400, { error: error.message }); }
     });
     return;
   }
@@ -203,7 +196,7 @@ sockets.on("connection", (socket) => {
 
 setInterval(() => {
   const state = buildState();
-  stepGoto(state);
+  navigator.step(state.robots[0], state.arena, state.obstacles);
   const message = JSON.stringify({ type: "state", data: state });
   for (const socket of sockets.clients) if (socket.readyState === WebSocket.OPEN) socket.send(message);
 }, 100);

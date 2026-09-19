@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node bridge.mjs",
-    "test": "node test.mjs",
+    "test": "node planner.test.mjs && node navigator.test.mjs && node test.mjs",
     "sim": "node sim.mjs"
   },
   "dependencies": {

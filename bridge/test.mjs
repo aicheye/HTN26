@@ -69,10 +69,12 @@ try {
   console.log("PASS  detector box becomes a cv obstacle at the right floor position");
 
   // Goal straight along +x while the robot faces +y: expect a right turn, then forward once it faces the goal.
+  await fetch("http://127.0.0.1:18080/objects", { method: "POST", body: JSON.stringify({ objects: [] }) });  // the chocolate is in the way
   robotMessages.length = 0;
   client.send(JSON.stringify({ type: "command", data: { id: "c4", ts: 0, robotId: "sesame-1", type: "goto", target: { x: 0.6, y: 0.3 } } }));
   await wait(300);
   assert.deepEqual(robotMessages.at(-1), { command: "right" });
+  assert.equal(states.at(-1).mission.state, "navigating");
   robotPose = { ...robotPose, heading: 5 };
   await wait(300);
   assert.deepEqual(robotMessages.at(-1), { command: "forward" });
@@ -81,7 +83,16 @@ try {
   await wait(300);
   assert.deepEqual(robotMessages.at(-1), { command: "stop" });
   assert.equal(states.at(-1).goal, undefined);
+  assert.equal(states.at(-1).mission.state, "done");
   console.log("PASS  goto: turns, walks, stops at the goal");
+
+  // A manual obstacle across the whole arena makes the goal unreachable.
+  await fetch("http://127.0.0.1:18080/obstacles", { method: "POST", body: JSON.stringify([{ shape: "rect", x: 0.3, y: 0.3, width: 0.04, length: 0.6 }]) });
+  client.send(JSON.stringify({ type: "command", data: { id: "c5", ts: 0, robotId: "sesame-1", type: "goto", target: { x: 0.1, y: 0.3 } } }));
+  await wait(3500);
+  assert.equal(states.at(-1).mission.state, "failed");
+  assert.match(states.at(-1).mission.detail, /no walkable path/);
+  console.log("PASS  goto behind a full wall: reports no walkable path");
   client.close();
 } finally {
   bridge.kill();

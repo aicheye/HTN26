@@ -10,3 +10,4 @@ pi/*.log
 pi/*.txt
 pi/*.jpg
 pi/qnx-camera-headers/
+bridge/motion.json
