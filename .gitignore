@@ -13,3 +13,4 @@ pi/qnx-camera-headers/
 bridge/motion.json
 bridge/drive.json
 bridge/walk-log.json
+recordings/

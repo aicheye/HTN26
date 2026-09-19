@@ -23,6 +23,8 @@
 //   GET /state.json         the latest JSON once
 //   GET /frame.jpg[?w=960]  current colour frame, optionally scaled down to the given width
 //   GET /annotated.jpg      the same with detected markers drawn
+//   GET /record/start[?every=2&w=0]  save frames on the Pi under ~/recordings/rec-NNN (every Nth frame, optional width)
+//   GET /record/stop        finish the recording. /record/status reports progress. pi/record.sh drives these.
 // Each JSON object carries the camera pose for that frame, so a pixel found in /frame.jpg can be
 // converted to floor centimetres by the client. See pi/API.md.
 #include <camera/camera_api.h>
@@ -36,6 +38,7 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -43,6 +46,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <deque>
 #include <csignal>
 #include <cstdarg>
 #include <cstdio>
@@ -93,6 +97,89 @@ struct Shared {
   std::vector<std::string> recentLog, unsentLog;
 };
 static Shared shared;
+
+// Saves camera frames on the Pi while a recording is on. The tracking loop only queues frames. A writer thread
+// converts and writes them, and frames are dropped when the SD card cannot keep up, so tracking never waits.
+// Each recording is a folder of JPEGs plus states.jsonl, one line per saved frame with the tracker state.
+struct Recorder {
+  std::mutex mutex;
+  std::condition_variable wake;
+  struct Item { cv::Mat gray, uv; long index; std::string state; };
+  std::deque<Item> queue;
+  bool recording = false;
+  std::string dir;
+  int every = 2, width = 0;
+  long seen = 0, saved = 0, dropped = 0;
+
+  std::string statusJson() {  // call with the mutex held
+    return std::string("{\"recording\":") + (recording ? "true" : "false") + ",\"dir\":\"" + dir + "\",\"frames\":" +
+           std::to_string(saved) + ",\"queued\":" + std::to_string(queue.size()) + ",\"dropped\":" + std::to_string(dropped) + "}\n";
+  }
+
+  std::string start(int everyNth, int scaledWidth) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (recording) return statusJson();
+    const char* home = std::getenv("HOME");
+    std::string base = std::string(home ? home : ".") + "/recordings";
+    mkdir(base.c_str(), 0755);
+    for (int n = 1; n < 10000; n++) {  // the Pi has no clock, so recordings are numbered
+      char name[32];
+      std::snprintf(name, sizeof(name), "/rec-%03d", n);
+      dir = base + name;
+      if (mkdir(dir.c_str(), 0755) == 0) break;
+    }
+    every = everyNth < 1 ? 1 : everyNth;
+    width = scaledWidth;
+    seen = saved = dropped = 0;
+    recording = true;
+    return statusJson();
+  }
+
+  std::string stop() {
+    std::unique_lock<std::mutex> lock(mutex);
+    recording = false;
+    wake.wait_for(lock, std::chrono::seconds(10), [this] { return queue.empty(); });  // let the writer finish
+    return statusJson();
+  }
+
+  void offer(const cv::Mat& gray, const cv::Mat& uv, const std::string& state) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!recording || seen++ % every != 0) return;
+    if (queue.size() >= 8) { dropped++; return; }
+    queue.push_back({gray, uv, seen - 1, state});
+    wake.notify_all();
+  }
+
+  void writerLoop() {
+    for (;;) {
+      Item item;
+      std::string folder;
+      int scaledWidth;
+      {
+        std::unique_lock<std::mutex> lock(mutex);
+        wake.wait(lock, [this] { return !queue.empty(); });
+        item = queue.front();
+        folder = dir;
+        scaledWidth = width;
+      }
+      cv::Mat bgr;
+      cv::cvtColorTwoPlane(item.gray, item.uv, bgr, cv::COLOR_YUV2BGR_NV12);
+      if (scaledWidth >= 160 && scaledWidth < bgr.cols) cv::resize(bgr, bgr, cv::Size(scaledWidth, bgr.rows * scaledWidth / bgr.cols), 0, 0, cv::INTER_AREA);
+      char name[40];
+      std::snprintf(name, sizeof(name), "frame-%06ld.jpg", item.index);
+      cv::imwrite(folder + "/" + name, bgr, {cv::IMWRITE_JPEG_QUALITY, 92});
+      if (FILE* states = std::fopen((folder + "/states.jsonl").c_str(), "a")) {
+        std::fprintf(states, "{\"file\":\"%s\",\"state\":%s}\n", name, item.state.substr(0, item.state.find('\n')).c_str());
+        std::fclose(states);
+      }
+      std::lock_guard<std::mutex> lock(mutex);
+      queue.pop_front();
+      saved++;
+      wake.notify_all();
+    }
+  }
+};
+static Recorder recorder;
 
 // Everything the tracker prints also goes to web clients: /events sends each line as a "log" event, and a
 // client that connects later first receives the recent lines.
@@ -177,16 +264,27 @@ static void handleHttp(int fd) {
     ids = shared.ids;
     state = shared.state;
   }
-  std::string body, type;
+  auto query = [&](const char* key, int fallback) {
+    size_t at = path.find(std::string(key) + "=");
+    return at == std::string::npos ? fallback : std::atoi(path.c_str() + at + std::strlen(key) + 1);
+  };
+  std::string body, type = "application/json";
   if (path.find("GET /state.json") == 0) {
     body = state;
-    type = "application/json";
+  } else if (path.find("GET /record/start") == 0) {
+    body = recorder.start(query("every", 2), query("w", 0));
+    say("recording started: %s", body.c_str());
+  } else if (path.find("GET /record/stop") == 0) {
+    body = recorder.stop();
+    say("recording stopped: %s", body.c_str());
+  } else if (path.find("GET /record/status") == 0) {
+    std::lock_guard<std::mutex> lock(recorder.mutex);
+    body = recorder.statusJson();
   } else if ((path.find("GET /frame.jpg") == 0 || path.find("GET /annotated.jpg") == 0) && !gray.empty()) {
     cv::Mat bgr;
     cv::cvtColorTwoPlane(gray, uv, bgr, cv::COLOR_YUV2BGR_NV12);
     if (path.find("GET /annotated.jpg") == 0) cv::aruco::drawDetectedMarkers(bgr, corners, ids);
-    size_t w = path.find("w=");
-    int width = w == std::string::npos ? 0 : std::atoi(path.c_str() + w + 2);
+    int width = query("w", 0);
     if (width >= 160 && width < bgr.cols) cv::resize(bgr, bgr, cv::Size(width, bgr.rows * width / bgr.cols), 0, 0, cv::INTER_AREA);
     std::vector<uchar> jpeg;
     cv::imencode(".jpg", bgr, jpeg, {cv::IMWRITE_JPEG_QUALITY, 80});
@@ -268,6 +366,7 @@ int main(int argc, char** argv) {
   }
   std::vector<int> clients;
   std::thread(serveHttp, httpServer).detach();
+  std::thread([] { recorder.writerLoop(); }).detach();
 
   camera_handle_t handle = CAMERA_HANDLE_INVALID;
   camera_error_t err = camera_open((camera_unit_t)unit, CAMERA_MODE_RO, &handle);
@@ -492,6 +591,7 @@ int main(int argc, char** argv) {
                        ",\"frame\":[" + std::to_string(gray.cols) + "," + std::to_string(gray.rows) + "],\"floor\":[" + std::to_string((int)floorW) + "," + std::to_string((int)floorH) + "],\"zUp\":" + (cam.valid && cam.C[2] < 0 ? "false" : "true") + ",\"learned\":" + std::to_string(learnedCount) + ",\"cameraHeight\":" + std::to_string(cam.valid ? (int)std::lround(std::abs(cam.C[2])) : -1) + ",\"floorMarkers\":" + std::to_string(floorMarkersSeen) + ",\"fps\":" + std::to_string((int)std::lround(fps)) + ",\"markers\":[" + idList +
                        "],\"robot\":" + robot + ",\"arm\":" + arm + ",\"camera\":" + cameraJson + "}\n";
 
+    recorder.offer(gray, uv, line);
     int fd;
     while ((fd = accept(server, nullptr, nullptr)) >= 0) clients.push_back(fd);
     broadcast(clients, line);

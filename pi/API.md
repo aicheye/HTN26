@@ -12,6 +12,7 @@ debugging.
 |---|---|
 | State, pushed once per frame (about 15 per second) | `http://qnxpi78.local:8003/events` (server-sent events, use `EventSource`) |
 | Every line the tracker prints, as `log` events on the same stream (`source.addEventListener("log", ...)`). A new client first receives the last 40 lines | same `/events` URL |
+| Record frames on the Pi (`pi/record.sh` drives these with one key) | `/record/start?every=2&w=0`, `/record/stop`, `/record/status` on the same port. Saved under `~/recordings/rec-NNN` with `states.jsonl` |
 | State, once | `http://qnxpi78.local:8003/state.json` |
 | Camera frame | `http://qnxpi78.local:8003/frame.jpg?w=960` (`w` is optional, full size is 2304x1296) |
 | Camera frame with markers drawn | `http://qnxpi78.local:8003/annotated.jpg` |
