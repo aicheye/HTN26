@@ -160,6 +160,7 @@ export type WorldState = {
   // lift the robot to one of `carry.drops`, from where the goal can be walked to.
   mission?: {
     state: string; detail?: string; carry?: { id: number; drops: Point[] };
+    via?: Point; // set while Spidey walks to where Armie can reach it, before the goal
     command?: string; waypoints?: number; recoveries?: number; carries?: number; edgeStops?: number;
     robotRadius?: number; drive?: string; trackerFps?: number; floorMarkers?: number; robotConnected?: boolean;
   };
@@ -189,15 +190,15 @@ export type Command = {
   target?: Point; // required when type = "goto"
   pose?: PoseName; // required when type = "pose"
   face?: FaceName; // required when type = "face", optional on any other command
-  /** type = "play": switches for what the robot does by itself. tour true starts one, false ends it. */
-  play?: { moods?: boolean; curious?: boolean; diary?: boolean; tour?: boolean };
+  /** type = "play": switches for what Spidey does by itself. */
+  play?: { curious?: boolean; diary?: boolean };
 };
 
-/** What the robot does by itself (bridge/behaviours.mjs), and its diary of the table, newest first. */
+/** What Spidey does by itself (bridge/behaviours.mjs), and its diary of the table, newest first. */
 export type PlayStatus = {
-  moods: boolean; curious: boolean; diary: { at: number; text: string; kind: "table" | "robot" }[];
-  tour: { visited: number; total: number } | null;
-  errand: { label: string; kind: "curious" | "tour" } | null;
+  curious: boolean;
+  diary: { at: number; text: string; kind: "table" | "robot" }[];
+  errand: { label: string; looking: boolean } | null;
 };
 
 export type Ack = { commandId: string; ok: boolean; error?: string };

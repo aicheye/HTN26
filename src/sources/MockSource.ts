@@ -93,7 +93,7 @@ export class MockSource implements StateSource {
   private navSteer = 0;
   private navClockMs = 0;
   private navigator = this.makeNavigator();
-  // What the robot does by itself, from the same module as the bridge: moods, curiosity, a tour, and the diary.
+  // What Spidey does by itself, from the same module as the bridge: curiosity, and the diary of the table.
   private behaviours: Behaviours = this.makeBehaviours();
 
   private stateSubs = new Set<(s: WorldState) => void>();
@@ -123,9 +123,7 @@ export class MockSource implements StateSource {
         this.navDrive = "";
         this.navigator.start({ ...target });
       },
-      face: (face) => { this.robot().face = face; },
-      pose: (pose) => { const robot = this.robot(); robot.pose = pose as Robot["pose"]; this.poseUntil = Date.now() + POSE_DURATION_MS; },
-    }, this.behaviours ? { moods: this.behaviours.status().moods, curious: this.behaviours.status().curious } : undefined);
+    }, this.behaviours ? { curious: this.behaviours.status().curious } : undefined);
   }
 
   /** Drops a small box at a random free spot, for the curiosity and diary features. */
@@ -236,10 +234,8 @@ export class MockSource implements StateSource {
       return;
     }
     if (c.type === "play") {
-      const { tour, ...switches } = c.play ?? {};
-      this.behaviours.configure(switches);
-      if (tour === false) { this.behaviours.interrupt(); this.navigator.cancel(); this.navDrive = ""; this.active = null; }
-      if (tour === true) this.behaviours.startTour(this.state.obstacles.filter((o) => o.source === "cv"), this.robot(), Date.now());
+      this.behaviours.configure(c.play ?? {});
+      if (c.play?.curious === false && this.behaviours.status().errand) { this.behaviours.interrupt(); this.navigator.cancel(); this.navDrive = ""; this.active = null; }
       this.emitAck({ commandId: c.id, ok: true });
       return;
     }

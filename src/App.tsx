@@ -7,6 +7,7 @@ import { CommandLog, Telemetry } from "./components/StatusPanel";
 import { useWorld } from "./state/StateProvider";
 import { VoiceControls } from "./components/VoiceControls";
 import { PlayControls } from "./components/PlayControls";
+import { StoryBanner } from "./components/StoryBanner";
 import { PanelSection } from "./components/PanelSection";
 import { TitleScreen } from "./components/TitleScreen";
 import { BlurredBackdrop } from "./components/BlurredBackdrop";
@@ -212,6 +213,7 @@ export default function App() {
               onSwapView={() => { setEnteredFromTop(mainView === "2d"); setMainView(mainView === "2d" ? "3d" : "2d"); }}
               enterFromTop={enteredFromTop}
             />
+            <StoryBanner insetLeft={section ? 256 : 0} />
             <p className="pointer-events-none absolute bottom-3 right-3 rounded bg-zinc-900/80 px-2 py-1 text-[11px] text-zinc-300">
               {mainView === "2d" ? "Drag to tilt into 3D · click to set a goal" : "Tilt to straight down for the 2D map"}
             </p>

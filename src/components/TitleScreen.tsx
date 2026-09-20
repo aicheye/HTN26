@@ -39,7 +39,7 @@ export function TitleScreen({ onStart }: { onStart: () => void }) {
   return (
     <div
       role="dialog"
-      aria-label="Sesame Controller"
+      aria-label="Spidey and Armie"
       style={{ transitionDuration: `${FADE_MS}ms` }}
       className={`fixed inset-0 z-50 overflow-hidden transition-opacity ${leaving ? "pointer-events-none opacity-0" : "opacity-100"}`}
     >
@@ -49,11 +49,11 @@ export function TitleScreen({ onStart }: { onStart: () => void }) {
           style={{ fontFamily: '"Unbounded", ui-sans-serif, system-ui, sans-serif' }}
           className="text-4xl font-bold tracking-[0.08em] text-zinc-50 sm:text-6xl"
         >
-          PLACEHOLDER
+          SPIDEY &amp; ARMIE
         </h1>
         <p className="mt-6 max-w-md text-sm leading-relaxed text-zinc-200 sm:text-base">
-          A robot that finds its own way around the table. Tell it where to go and it plans the route,
-          steering around obstacles and calling in the arm when it needs a lift.
+          Spidey walks the table by itself: tell it where to go and it finds a way round whatever is in the way.
+          When there is no way round, Armie picks it up and lifts it over.
         </p>
         <button
           ref={button}

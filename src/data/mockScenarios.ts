@@ -2,12 +2,12 @@ import { cloneSampleWorldState } from "./sampleWorldState";
 import type { Obstacle, Point, WorldState } from "../types/world";
 
 export const MOCK_SCENARIOS = [
-  { id: "barrier", label: "Carry over barrier" },
-  { id: "pickup", label: "Walk to the arm, then carry" },
-  { id: "detour", label: "Walk around a box" },
-  { id: "mixed", label: "Mixed detections" },
-  { id: "unreachable", label: "Outside arm reach" },
-  { id: "empty", label: "Empty tabletop" },
+  { id: "barrier", label: "Armie lifts Spidey over a wall" },
+  { id: "pickup", label: "Spidey walks to Armie, then gets a lift" },
+  { id: "detour", label: "Spidey walks round a box" },
+  { id: "mixed", label: "A wall and two more objects" },
+  { id: "unreachable", label: "Shut in where Armie cannot reach" },
+  { id: "empty", label: "Empty table: click to walk" },
 ] as const;
 export type MockScenarioId = typeof MOCK_SCENARIOS[number]["id"];
 
@@ -45,8 +45,8 @@ export function makeMockScenario(id: MockScenarioId): WorldState {
   if (id === "empty") start = { x: 0.3175, y: 0.3175 };
   Object.assign(state.robots[0], start, { yaw: Math.PI / 2, z: 0, mode: "idle", footprint: { width: 0.134, length: 0.125 } });
   state.simulation = { scenario: id, status: "ready", testGoal: goal,
-    message: id === "empty" ? "Click the map to walk." : id === "detour" ? "Run the test: plan a path round the box and walk it."
-      : id === "pickup" ? "Run the test: no way through, walk to the arm, get carried over, walk on."
-      : "Run the test: no way through, pick up, carry, place, and walk on." };
+    message: id === "empty" ? "Click the map to walk." : id === "detour" ? "Run the test: Spidey plans a way round the box and walks it."
+      : id === "pickup" ? "Run the test: no way through, so Spidey walks to Armie, gets lifted over, and walks on."
+      : "Run the test: no way through, so Armie lifts Spidey over and it walks on." };
   return state;
 }

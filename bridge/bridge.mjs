@@ -81,22 +81,15 @@ function move(command, face = {}, steer = 0) {
   return robotSocket?.readyState === WebSocket.OPEN;
 }
 const navigator = new Navigator((command, steer) => move(command, {}, steer), savedMotion);
-// What the robot does by itself: moods, curiosity, a tour of the table, and a diary (behaviours.mjs). Each has a
-// switch, set with the "play" command from the web UI or POST /play {"moods": true, "curious": false, "tour": true}.
+// What Spidey does by itself: curiosity, and a diary of the table (behaviours.mjs). Switched with the "play" command
+// from the web UI, or POST /play {"curious": true}.
 const behaviours = new Behaviours({
   goto: (target) => navigator.start(target),
-  face: (face) => sendToRobot({ face }),
-  pose: (pose) => { gaitEngine.set("stop"); sendToRobot({ command: pose }); },
   ignore: (obstacle) => isArmDetection(obstacle, lastArm),
 });
 function play(options) {
-  const { tour, ...switches } = options;
-  behaviours.configure(Object.fromEntries(Object.entries(switches).filter(([key]) => ["moods", "curious", "diary"].includes(key)).map(([key, value]) => [key, Boolean(value)])));
-  if (tour === false) { behaviours.interrupt(); navigator.cancel(); }
-  if (tour === true && latestState?.robots[0]) {
-    const objects = latestState.obstacles.filter((o) => o.source === "cv" && !isArmDetection(o, lastArm));
-    behaviours.startTour(objects, latestState.robots[0], Date.now());
-  }
+  behaviours.configure(Object.fromEntries(Object.entries(options).filter(([key]) => ["curious", "diary"].includes(key)).map(([key, value]) => [key, Boolean(value)])));
+  if (options.curious === false) { const busy = behaviours.status().errand; behaviours.interrupt(); if (busy) navigator.cancel(); }
   return behaviours.status();
 }
 
@@ -224,7 +217,7 @@ function buildState() {
       trackerFps: tracker?.fps ?? 0, floorMarkers: tracker?.floorMarkers ?? 0, robotConnected: robotSocket?.readyState === WebSocket.OPEN,
       ...(carry ? { carry: { id: carry.id, drops: carry.drops } } : {}),
     },  // not part of the frontend schema: navigation state for display and debugging
-    play: behaviours.status(),  // not part of the frontend schema either: what the robot does by itself, and the diary
+    play: behaviours.status(),  // not part of the frontend schema either: what Spidey does by itself, and the diary
   };
 }
 

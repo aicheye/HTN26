@@ -19,6 +19,7 @@ import {
 } from "./mapShared";
 import type { Obstacle, Point, Robot, WorldState } from "../types/world";
 import { trail } from "../state/trail";
+import { ARMIE, SPIDEY } from "../robot/names";
 
 const PADDING = 20; // px around the arena
 
@@ -399,7 +400,7 @@ function drawArm(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {
     ctx.font = "600 9px ui-monospace, monospace";
     ctx.textAlign = "center";
     ctx.fillStyle = "#c2410c";
-    ctx.fillText(arm.mode.toUpperCase(), x, y + (arm.mount.side === "north" ? 18 : -14));
+    ctx.fillText(`${ARMIE.toUpperCase()} · ${arm.mode.toUpperCase()}`, x, y + (arm.mount.side === "north" ? 18 : -14));
     ctx.restore();
   }
 }
@@ -483,7 +484,7 @@ function drawRobot(ctx: CanvasRenderingContext2D, r: Robot, v: View, carried: bo
 
   ctx.save();
   const top = Math.max(...model.legs.map(({ foot }) => foot.x * Math.sin(r.yaw) + foot.y * Math.cos(r.yaw)), 0.04);
-  const label = r.tracking ? r.id : `${r.id} · no tracking`;
+  const label = r.tracking ? SPIDEY : `${SPIDEY} · out of sight`;
   const labelY = cy - top * s - 13;
   ctx.font = "500 10px system-ui, sans-serif";
   ctx.textAlign = "center";

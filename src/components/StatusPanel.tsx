@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorld } from "../state/StateProvider";
 import type { WorldState } from "../types/world";
+import { SPIDEY } from "../robot/names";
 import { costmap as planCostmap } from "../../bridge/planner.mjs";
 
 function staleMs(lastSeen: number): number {
@@ -35,7 +36,7 @@ export function Telemetry() {
         </p>
       )}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-        <Row label="Robot" value={robot.id} />
+        <Row label="Robot" value={`${SPIDEY} (${robot.id})`} />
         <Row label="Tag" value={`#${robot.tagId}`} />
         <Row label="Mode" value={robot.mode} muted={robot.mode === "lost"} />
         <Row label="X" value={`${robot.x.toFixed(3)} m`} />
