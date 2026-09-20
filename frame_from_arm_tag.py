@@ -37,7 +37,8 @@ def frame_from_tag(arm_tag, ahead_cm, left_cm, turn_deg, mirrored=False):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[0.0, 0.0])
+    ap.add_argument("--offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[0.0, 0.0],
+                    help="base centre relative to the tag centre; 0 0 when the tag sits on the base (the default setup)")
     ap.add_argument("--turn", type=float, default=0.0)
     ap.add_argument("--tracker")
     ap.add_argument("--out", default="arm_frame.json")
