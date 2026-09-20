@@ -35,3 +35,14 @@ def send(robot, action):
         print(msg)
         raise UnsafePoseError(msg)
     return robot.send_action(action)
+
+
+def arm_config(port):
+    """SO101FollowerConfig for this arm: the repo's calibration/so_follower/follower.json when present
+    (the motor calibration of this particular arm, so any laptop can drive it), else LeRobot's cache."""
+    from pathlib import Path
+    from lerobot.robots.so_follower import SO101FollowerConfig
+    here = Path(__file__).resolve().parent / "calibration" / "so_follower"
+    if (here / "follower.json").exists():
+        return SO101FollowerConfig(port=port, id="follower", calibration_dir=here)
+    return SO101FollowerConfig(port=port, id="follower")
