@@ -110,6 +110,30 @@ def s_real():
     return f"{clip}: pose from {s['source']}, robot radius {s['robot_radius_cm']:.1f} cm, z std {s['z_std_cm']:.2f} cm, figure written"
 
 
+def s_live():
+    """The live path: a fake Pi replays a recording over HTTP with the X-State header, the loop runs against it."""
+    clips = sorted(d for d in glob.glob("recordings/rec-*") + glob.glob("recordings/synth-driving") if os.path.isfile(os.path.join(d, "states.jsonl")))
+    if not clips:
+        return "SKIP no recording to replay as a live camera"
+    from fake_tracker import serve
+    from nav.run import LiveSource, Pipeline
+    servers = serve(units=(3,), recording=clips[-1], fps=5.0)
+    try:
+        time.sleep(0.5)
+        src, pipe = LiveSource("localhost", 3), Pipeline()
+        end = time.time() + 8
+        while time.time() < end:
+            frame, t, rec = src.next()
+            pipe.tick(frame, t, rec["state"])
+        s = pipe.summary()
+        assert s["frozen"], "never calibrated on the live stream"
+        assert pipe.state in ("NAVIGATING", "HOLD", "ARRIVED", "PLANNING", "BLOCKED"), pipe.state
+        return f"{os.path.basename(clips[-1])} over HTTP: pose from {s['source']}, {s['frames']} ticks, state {pipe.state}"
+    finally:
+        for sv in servers:
+            sv.shutdown()
+
+
 def s_preflight():
     run([PY, "preflight.py"]) if os.path.isfile("preflight.py") else None
     return "ran" if os.path.isfile("preflight.py") else "SKIP preflight.py not in this checkout"
@@ -137,6 +161,7 @@ def main():
     step("Sean's object detector in nav", s_objects)
     step("four-panel figure", s_figure)
     step("nav on a real recording", s_real)
+    step("live path (fake Pi over HTTP)", s_live)
     step("preflight", s_preflight)
     step("arm ping", s_arm)
     failed = [n for n, st in results if st == "FAIL"]

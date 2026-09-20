@@ -2,7 +2,9 @@
 localhost with a fixed robot and arm-tag pose in the floor frame.
 
     .venv/bin/python fake_tracker.py --robot 30 20 45 --arm 70 8 180 [--zup 1] [--noise 0.2]
-then point the clients at it:  --tracker localhost
+    .venv/bin/python fake_tracker.py --recording recordings/rec-001     replays a recording: /frame.jpg (with the
+                                                                        X-State header, as the Pi sends it) and /state.json
+then point the clients at it:  --tracker localhost   or   python -m nav.run --live localhost
 """
 import argparse
 import json
@@ -12,15 +14,37 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
-def serve(robot=(30.0, 20.0, 45.0), arm=(70.0, 8.0, 180.0), zup=True, noise=0.1, units=(3, 4), host="127.0.0.1"):
-    """Start the fake tracker on daemon threads and return the servers (call .shutdown() on each to stop)."""
+def serve(robot=(30.0, 20.0, 45.0), arm=(70.0, 8.0, 180.0), zup=True, noise=0.1, units=(3, 4), host="127.0.0.1", recording=None, fps=2.0):
+    """Start the fake tracker on daemon threads and return the servers (call .shutdown() on each to stop).
+    With a recording folder, /frame.jpg and /state.json come from it, cycling at fps."""
     t0 = time.time()
+    rec = None
+    if recording:
+        import os
+        with open(os.path.join(recording, "states.jsonl")) as f:
+            rec = [json.loads(l) for l in f if l.strip()]
+        rec_dir = recording
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
 
         def do_GET(self):
+            if rec is not None:
+                k = int((time.time() - t0) * fps) % len(rec)
+                entry = rec[k]
+                state = dict(entry["state"]); state["t"] = int(1000 * (time.time() - t0))
+                if self.path.startswith("/frame.jpg"):
+                    import os
+                    with open(os.path.join(rec_dir, entry["file"]), "rb") as f:
+                        body = f.read()
+                    self.send_response(200); self.send_header("Content-Type", "image/jpeg"); self.send_header("Content-Length", str(len(body)))
+                    self.send_header("X-State", json.dumps(state)); self.end_headers(); self.wfile.write(body); return
+                if self.path.startswith("/state.json"):
+                    body = json.dumps(state).encode()
+                    self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(body))); self.end_headers()
+                    self.wfile.write(body); return
+                self.send_response(404); self.end_headers(); return
             if not self.path.startswith("/state.json"):
                 self.send_response(404); self.end_headers(); return
             n = lambda: random.gauss(0, noise)
@@ -48,8 +72,10 @@ def main():
     ap.add_argument("--zup", type=int, default=1)
     ap.add_argument("--noise", type=float, default=0.1, help="cm of jitter on the poses")
     ap.add_argument("--units", type=int, nargs="+", default=[3, 4])
+    ap.add_argument("--recording", help="replay this recording folder as the live camera")
+    ap.add_argument("--fps", type=float, default=2.0)
     args = ap.parse_args()
-    serve(args.robot, args.arm, bool(args.zup), args.noise, args.units)
+    serve(args.robot, args.arm, bool(args.zup), args.noise, args.units, recording=args.recording, fps=args.fps)
     print(f"fake tracker: units {args.units} on ports {[8000 + u for u in args.units]}, robot {args.robot}, arm {args.arm}, zUp {bool(args.zup)}")
     try:
         while True:

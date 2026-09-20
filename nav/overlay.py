@@ -40,8 +40,28 @@ def draw_robot(img, g, robot, colour=GREEN, scale=1.0):
     cv2.arrowedLine(img, (int(u), int(v)), (int(tip[0]), int(tip[1])), colour, 2, tipLength=0.3)
 
 
-def compose(frame, tags, g, rect, seg_out, planner, plan, robot, goal_xy, lookahead_xy, info):
-    """Returns the overlay image (BGR)."""
+def setup_panel(frame, tags, g, hint, tracker_state):
+    """What the loop is waiting for during calibration: the tags it sees, the corners it needs, the
+    tracker's own view of the robot if there is one."""
+    panel = np.zeros((PANEL_H, 3 * PANEL_H // 2, 3), np.uint8)
+    y = 26
+    lines = ["CALIBRATING", "", f"corner tags seen: {[i for i in sorted(tags) if i in CORNER_IDS]}",
+             f"corner tags needed: {[i for i in CORNER_IDS if i not in tags]}",
+             f"robot tag: {'seen' if ROBOT_ID in tags else 'not seen'}   arm tag: {'seen' if ARM_ID in tags else 'not seen'}", ""]
+    for chunk in (hint or "").split("; "):
+        lines.append(chunk)
+    if tracker_state:
+        r = tracker_state.get("robot")
+        lines += ["", f"Pi tracker: calibrated={tracker_state.get('calibrated')}  floor markers {tracker_state.get('floorMarkers')}  fps {tracker_state.get('fps')}",
+                  (f"  robot at ({r['x']:.1f}, {r['y']:.1f}) cm heading {r['heading']:.0f}" if r and 'x' in r else "  robot not tracked")]
+    lines += ["", "the tag panels fill in once the pose is frozen"]
+    for line in lines:
+        cv2.putText(panel, line, (10, y), FONT, 0.55, WHITE if line != "CALIBRATING" else YELLOW, 1, cv2.LINE_AA); y += 22
+    return panel
+
+
+def compose(frame, tags, g, rect, seg_out, planner, plan, robot, goal_xy, lookahead_xy, info, setup_hint="", tracker_state=None):
+    """Returns the overlay image (BGR). The layout has the same size before and after calibration."""
     panels = []
     # 1. raw frame with tags
     raw = frame.copy()
@@ -55,7 +75,9 @@ def compose(frame, tags, g, rect, seg_out, planner, plan, robot, goal_xy, lookah
     raw, _ = fit(raw); label(raw, "1 raw + tags"); panels.append(raw)
 
     if rect is None:
-        blank = np.zeros((PANEL_H, PANEL_H, 3), np.uint8); label(blank, "waiting for the four corner tags"); panels.append(blank)
+        panels.append(setup_panel(frame, tags, g, setup_hint, tracker_state))
+        for i in range(2, 6):
+            blank = np.zeros((PANEL_H, PANEL_H, 3), np.uint8); label(blank, f"{i + 1 if i > 2 else 3} (after calibration)"); panels.append(blank)
     else:
         r2, s = fit(rect); label(r2, "2 rectified"); panels.append(r2)
         # 3. obstacle mask
