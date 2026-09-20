@@ -10,4 +10,7 @@ export type MapProps = {
   /** With compact: slowly circle the board at a 30 degree elevation instead of holding a fixed angle. */
   orbit?: boolean;
   onPickGoal?: (p: Point) => void;
+  /** Pixels on the left that the side panel covers. The 2D map fits the arena into what is left of the width, so
+   *  an open panel does not hide part of it. The canvas keeps its size. */
+  insetLeft?: number;
 };

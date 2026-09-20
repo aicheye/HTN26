@@ -28,6 +28,7 @@ export function Map2D({
   showCameraLayer = false,
   compact = false,
   onPickGoal,
+  insetLeft = 0,
 }: MapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -49,7 +50,7 @@ export function Map2D({
         canvas.height = h * dpr;
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      viewRef.current = computeView(state, w, h, compact ? 8 : PADDING);
+      viewRef.current = computeView(state, w, h, compact ? 8 : PADDING, insetLeft);
       render(ctx, w, h, state, viewRef.current, showCameraLayer, compact);
     };
 
@@ -63,7 +64,7 @@ export function Map2D({
     const animate = () => { draw(); frame = requestAnimationFrame(animate); };
     if (state.robots.some((r) => r.mode === "moving" || r.mode === "turning")) frame = requestAnimationFrame(animate);
     return () => { ro.disconnect(); cancelAnimationFrame(frame); };
-  }, [state, showCameraLayer, compact]);
+  }, [state, showCameraLayer, compact, insetLeft]);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!onPickGoal) return;
@@ -88,13 +89,14 @@ export function Map2D({
   );
 }
 
-function computeView(state: WorldState, w: number, h: number, pad = PADDING): View {
+function computeView(state: WorldState, w: number, h: number, pad = PADDING, insetLeft = 0): View {
   const { width, length } = state.arena;
   const border = tableBorder(state.arena);
-  const scale = Math.max(1, Math.min((w - pad * 2) / (width + border * 2), (h - pad * 2) / (length + border * 2)));
+  const room = Math.max(1, w - insetLeft);  // the width that the side panel leaves free
+  const scale = Math.max(1, Math.min((room - pad * 2) / (width + border * 2), (h - pad * 2) / (length + border * 2)));
   return {
     scale,
-    offsetX: (w - width * scale) / 2,
+    offsetX: insetLeft + (room - width * scale) / 2,
     offsetY: (h - length * scale) / 2,
     height: h,
   };

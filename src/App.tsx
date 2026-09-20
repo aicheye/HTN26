@@ -205,6 +205,7 @@ export default function App() {
               state={state}
               selectedRobotId={selectedRobotId}
               onPickGoal={(point) => send("goto", { target: point })}
+              insetLeft={section ? 256 : 0}  // the open side panel is w-64 and lies over the map
             />
 
             <div className="absolute right-3 top-3 h-40 w-56 overflow-hidden rounded-lg bg-zinc-900 shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
