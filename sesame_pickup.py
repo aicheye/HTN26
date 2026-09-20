@@ -331,8 +331,14 @@ def main():
         if dry or arm is None:
             return True
         print("  running")
-        execute(arm, traj, args.speed)
-        print("  back to the ready pose")
+        try:
+            execute(arm, traj, args.speed)
+        except Exception as e:                      # a refused or failed move mid-way: still go back to zero
+            print(f"  MOVE STOPPED: {type(e).__name__}: {str(e)[:200]}")
+            print("  returning to zero")
+            arm.slew(READY, GRIPPER_OPEN_AUTO)
+            return False
+        print("  back to zero")
         arm.slew(READY, traj[-1][2])
         frame_now = frame0.adjusted_for_arm_tag(obs["arm"])
         last["drop_floor"] = tuple(frame_now.to_floor([[100 * info["drop"]["x"], 100 * info["drop"]["y"]]])[0])
