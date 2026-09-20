@@ -19,7 +19,7 @@ import { WebSocketServer } from "ws";
 import { pixelToFloor } from "../pi/client/floor.js";
 import { GaitEngine } from "./gait.mjs";
 import { Navigator } from "./navigator.mjs";
-import { EDGE_MARGIN_M, ROBOT_RADIUS_M, carryTargets, costmap, leavesArena } from "./planner.mjs";
+import { EDGE_MARGIN_M, ROBOT_RADIUS_M, costmap, leavesArena } from "./planner.mjs";
 import { PoseFilter } from "./pose-filter.mjs";
 import { createVoiceHandler } from "./voice.mjs";
 
@@ -83,13 +83,11 @@ const navigator = new Navigator((command) => move(command), savedMotion);
 // When goto finds no walkable path, the arm is asked to lift the robot to a place it can reach the goal from. The
 // request waits here for whatever drives the arm (arm_carry.py) to fetch it with GET /carry and answer it with
 // POST /carry. The arm's own planner decides whether it reaches a drop point, so several are offered, the ones
-// nearest its base first. ARM_REACH_M only limits how far from the base they are looked for.
+// nearest its base first. ARM_REACH_M is how far from the base the arm is taken to reach: drop points are looked
+// for within it, and a robot further away first walks to within it (navigator.mjs).
 const ARM_REACH_M = Number(process.env.ARM_REACH_M ?? 0.3);
 let carry = null, carryId = 0;
-navigator.requestCarry = (goal) => {
-  if (!lastArm || !latestState) return false;
-  const drops = carryTargets(goal, latestState.arena, latestState.obstacles, lastArm, ARM_REACH_M, robotRadius);
-  if (drops.length === 0) return false;
+navigator.requestCarry = (goal, drops) => {
   carry = { id: ++carryId, goal, drops, requestedAt: Date.now() };
   console.log(`carry ${carry.id}: no walkable path, asking the arm to set the robot down at one of ${JSON.stringify(drops)}`);
   return true;
@@ -389,6 +387,7 @@ setInterval(() => {
   // A walk keeps going until the next command, so it is checked on every tick, not only when it starts.
   const walk = (drive.mode === "software" && gaitEngine.command) || (robotState?.command ?? "");
   if (state.robots[0]?.tracking && leavesArena(state.robots[0], state.arena, walk)) { edgeStops++; move("stop"); }
+  navigator.arm = lastArm ? { base: lastArm, reach: ARM_REACH_M } : null;
   navigator.step(state.robots[0], state.arena, state.obstacles);
   if (navigator.state !== "carrying") carry = null;  // cancelled, timed out, or answered
   const message = JSON.stringify({ type: "state", data: state });

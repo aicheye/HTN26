@@ -7,7 +7,7 @@
 //  - it ends a turn or a walk early by the distance the robot keeps moving after "stop" (measured by calibrate())
 //  - it walks backward to a close target behind it, which is faster than turning around
 //  - it aims slightly against the robot's measured sideways drift
-import { planPath } from "./planner.mjs";
+import { carryTargets, pickupTarget, planPath } from "./planner.mjs";
 
 export const DEFAULT_MOTION = {
   walkSpeed: 0.04,      // m/s
@@ -45,9 +45,13 @@ export class Navigator {
     this.send = send;  // (command string) => void
     this.motion = { ...DEFAULT_MOTION, ...motion };
     this.robotRadius = undefined;  // metres, set by the bridge once the camera has measured the robot
-    // Set by the bridge: (goal) => true when an arm has been asked to carry the robot to where it can reach the
-    // goal from. Without it, a goto with no walkable path fails as before.
+    // Set by whatever hosts the navigator (the bridge, or the web UI's mock). arm is { base: {x, y}, reach } in
+    // metres, or null when there is no arm. requestCarry(goal, drops) returns true when an arm has been asked to
+    // carry the robot to one of the drop points. Without both, a goto with no walkable path fails as before.
+    this.arm = null;
     this.requestCarry = null;
+    // While set, the robot is walking here, to where the arm can reach it, and not yet to the goal.
+    this.via = null;
     this.state = "idle";  // idle, navigating, recovering, calibrating, done, failed
     this.detail = "";
     this.goal = null;
@@ -57,18 +61,39 @@ export class Navigator {
   }
 
   status() {
-    return { state: this.state, detail: this.detail, recoveries: this.recoveries, motion: this.motion, command: this.drive, waypoints: this.path.length, carries: this.carries ?? 0 };
+    return { state: this.state, detail: this.detail, recoveries: this.recoveries, motion: this.motion, command: this.drive, waypoints: this.path.length, carries: this.carries ?? 0, ...(this.via ? { via: this.via } : {}) };
   }
 
   start(goal) {
-    Object.assign(this, { goal, path: [], state: "navigating", detail: "", recoveries: 0, failedPlans: 0, plannedAt: 0, lostSince: 0, progress: null, watch: null, carries: 0 });
+    Object.assign(this, { goal, path: [], state: "navigating", detail: "", recoveries: 0, failedPlans: 0, plannedAt: 0, lostSince: 0, progress: null, watch: null, carries: 0, via: null });
   }
 
   // The arm's answer to a carry request. After a carry the robot stands somewhere new, so planning starts over.
   carried(ok, reason = "") {
     if (this.state !== "carrying") return;
     if (!ok) return this.finish("failed", `no walkable path, and the arm could not carry the robot: ${reason || "no reason given"}`);
-    Object.assign(this, { state: "navigating", detail: "", path: [], failedPlans: 0, plannedAt: 0, lostSince: 0, progress: null, watch: null });
+    Object.assign(this, { state: "navigating", detail: "", path: [], failedPlans: 0, plannedAt: 0, lostSince: 0, progress: null, watch: null, via: null });
+  }
+
+  // No path to the goal exists. With an arm, the robot first walks to where the arm can reach it, when it is not
+  // there yet, and then the arm is asked to carry it to a place the goal can be walked to from. Without an arm, or
+  // when that is not possible either, the goto fails.
+  blocked(robot, arena, obstacles, now) {
+    const fail = (why) => this.finish("failed", why ? `no walkable path to the goal, and ${why}` : "no walkable path to the goal");
+    if (!this.arm || !this.requestCarry) return fail("");
+    if (this.carries >= MAX_CARRIES) return fail(`the arm has already carried the robot ${MAX_CARRIES} times`);
+    const drops = carryTargets(this.goal, arena, obstacles, this.arm.base, this.arm.reach, this.robotRadius);
+    if (drops.length === 0) return fail("");  // the arm does not reach the goal's side of the obstacle either
+    if (Math.hypot(robot.x - this.arm.base.x, robot.y - this.arm.base.y) > this.arm.reach) {
+      const pickup = pickupTarget(robot, arena, obstacles, this.arm.base, this.arm.reach, this.robotRadius);
+      if (!pickup) return fail("the robot cannot walk to where the arm reaches");
+      Object.assign(this, { via: pickup, path: [], failedPlans: 0, plannedAt: 0, watch: null,
+        detail: "no walkable path: walking to where the arm can pick the robot up" });
+      return;
+    }
+    if (!this.requestCarry(this.goal, drops)) return fail("the arm could not be asked to carry the robot");
+    this.setDrive("stop", now);
+    Object.assign(this, { state: "carrying", detail: "no walkable path: waiting for the arm to carry the robot past the obstacle", carryAt: now, carries: this.carries + 1, path: [], drive: "", via: null });
   }
 
   cancel() {
@@ -109,21 +134,19 @@ export class Navigator {
     if (this.isStuck(robot, now)) return this.startRecovery(now);
 
     if (now - this.plannedAt > REPLAN_MS || this.path.length === 0) {
-      const planned = planPath(robot, this.goal, arena, obstacles, this.robotRadius);
+      // The goal is tried first on every replan, also on the way to the pick-up spot: when the obstacle has been
+      // taken away in the meantime, the robot simply walks.
+      let planned = planPath(robot, this.goal, arena, obstacles, this.robotRadius);
+      if (planned) this.via = null;
+      else if (this.via) planned = planPath(robot, this.via, arena, obstacles, this.robotRadius);
       this.plannedAt = now;
       if (!planned) {
         if (++this.failedPlans < MAX_FAILED_PLANS) return this.setDrive("stop", now);
-        if (this.carries < MAX_CARRIES && this.requestCarry?.(this.goal)) {
-          this.setDrive("stop", now);
-          Object.assign(this, { state: "carrying", detail: "no walkable path: waiting for the arm to carry the robot past the obstacle", carryAt: now, carries: this.carries + 1, path: [], drive: "" });
-          return;
-        }
-        this.finish("failed", "no walkable path to the goal");
-        return;
+        return this.blocked(robot, arena, obstacles, now);
       }
       this.failedPlans = 0;
       this.path = planned.slice(1);
-      this.detail = planned.goalMoved ? "goal is against a wall or obstacle; heading for the nearest reachable spot" : "";
+      if (!this.via) this.detail = planned.goalMoved ? "goal is against a wall or obstacle; heading for the nearest reachable spot" : "";
     }
 
     // Advance past waypoints that are reached, counting the distance the robot still covers after a stop.
@@ -133,7 +156,11 @@ export class Navigator {
       if (Math.hypot(target.x - robot.x, target.y - robot.y) > reach) break;
       this.path.shift();
     }
-    if (this.path.length === 0) return this.finish("done", "");
+    if (this.path.length === 0) {
+      if (!this.via) return this.finish("done", "");
+      this.setDrive("stop", now);   // at the pick-up spot: now the arm is asked
+      return this.blocked(robot, arena, obstacles, now);
+    }
 
     // Fail instead of walking forever when the route to the goal stops getting shorter.
     let remaining = Math.hypot(this.path[0].x - robot.x, this.path[0].y - robot.y);

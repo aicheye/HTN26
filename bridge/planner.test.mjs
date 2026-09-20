@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { CARRY_SLACK_M, CLEARANCE_M, EDGE_MARGIN_M, carryTargets, costmap, distanceToObstacle, leavesArena, planPath } from "./planner.mjs";
+import { CARRY_SLACK_M, CLEARANCE_M, EDGE_MARGIN_M, PICKUP_INSET_M, carryTargets, costmap, distanceToObstacle, leavesArena, pickupTarget, planPath } from "./planner.mjs";
 
 const arena = { width: 0.76, length: 0.6 };
 // Scenes keep the robot's centre inside the 0.07 m limit at the edge.
@@ -124,3 +124,13 @@ assert.equal(cellAt(0.03, 0.3), -1, "past the limit at the edge");
 assert.equal(cellAt(0.5, 0.5), 1, "open floor");
 assert.ok(cellAt(0.3, 0.47) > 1 && cellAt(0.3, 0.47) <= 4, "within 5 cm of the box's clearance");
 console.log("PASS  costmap for display: blocked, open and near-limit cells");
+
+// The robot is on the far side of the wall, 0.55 m from the arm's base, and the arm reaches 0.45 m. It is sent to
+// the nearest spot on its own side that is 3 cm inside that reach. With a 0.3 m reach its side has no such spot.
+const far = { x: 0.15, y: 0.3 }, reachBarrier = { shape: "rect", x: 0.45, y: 0.3, yaw: 0, width: 0.04, length: 0.6 };
+const spot = pickupTarget(far, arena, [reachBarrier], armBase, 0.45);
+assert.ok(spot.x < 0.45 - 0.02 - CLEARANCE_M + 0.011, `pick-up spot ${JSON.stringify(spot)} is on the robot's side`);
+assert.ok(Math.hypot(spot.x - armBase.x, spot.y - armBase.y) <= 0.45 - PICKUP_INSET_M + 1e-9, "inside the arm's reach");
+assert.ok(planPath(far, spot, arena, [reachBarrier]), "and the robot can walk there");
+assert.equal(pickupTarget(far, arena, [reachBarrier], armBase, 0.3), null);
+console.log(`PASS  out of the arm's reach: walks ${(100 * Math.hypot(spot.x - far.x, spot.y - far.y)).toFixed(0)} cm to a pick-up spot, none when the arm cannot reach its side`);

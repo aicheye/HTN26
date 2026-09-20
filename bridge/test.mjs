@@ -29,7 +29,7 @@ fakeRobot.on("connection", (socket) => {
 });
 
 const bridge = spawn("node", ["bridge.mjs"], {
-  env: { ...process.env, BRIDGE_STATE_DIR: fs.mkdtempSync(os.tmpdir() + "/bridge-test-"), PORT: "18080", TRACKER_HOST: "127.0.0.1", TRACKER_PORT: "19003", ROBOT_URL: "ws://127.0.0.1:18081" },
+  env: { ...process.env, BRIDGE_STATE_DIR: fs.mkdtempSync(os.tmpdir() + "/bridge-test-"), PORT: "18080", TRACKER_HOST: "127.0.0.1", TRACKER_PORT: "19003", ROBOT_URL: "ws://127.0.0.1:18081", ARM_REACH_M: "0.45" },
   stdio: "inherit",
 });
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -122,19 +122,29 @@ try {
   assert.notEqual(first.textureUrl, second.textureUrl);
   assert.equal(await (await fetch(second.textureUrl)).text(), "picture two");
   console.log("PASS  obstacle picture: served by URL, and the URL changes only with the picture");
-  // The same wall, with the goal on the arm's side of it (the fake tracker reports the arm's base at 0.70, 0.10).
-  // No path exists, so the bridge asks the arm to carry the robot, and offers drop points in the tracker's frame.
+  // A wall across the arena at x = 0.45 with the goal on the arm's side of it (the fake tracker reports the arm's
+  // base at 0.70, 0.10, and this bridge takes its reach as 0.45 m). No path exists. The robot stands 0.59 m from
+  // the base, out of reach, so it first walks to a spot on its own side that the arm does reach. Only there is
+  // the arm asked, with drop points in the tracker's frame.
   const gotoAcrossWall = async (id) => {
-    await fetch("http://127.0.0.1:18080/obstacles", { method: "POST", body: JSON.stringify([{ shape: "rect", x: 0.3, y: 0.3, width: 0.04, length: 0.6 }]) });
+    await fetch("http://127.0.0.1:18080/obstacles", { method: "POST", body: JSON.stringify([{ shape: "rect", x: 0.45, y: 0.3, width: 0.04, length: 0.6 }]) });
     robotPose = { ...robotPose, x: 15, y: 30, heading: 0 };
     await wait(1200);
-    client.send(JSON.stringify({ type: "command", data: { id, ts: 0, robotId: "sesame-1", type: "goto", target: { x: 0.55, y: 0.35 } } }));
+    client.send(JSON.stringify({ type: "command", data: { id, ts: 0, robotId: "sesame-1", type: "goto", target: { x: 0.62, y: 0.5 } } }));
     await wait(3500);
+    const walking = states.at(-1).mission;
+    assert.equal(walking.state, "navigating");
+    assert.match(walking.detail, /walking to where the arm can pick the robot up/);
+    assert.ok(walking.via.x < 0.45 - 0.02 - 0.1 + 0.011, `the pick-up spot ${JSON.stringify(walking.via)} is on the robot's side of the wall`);
+    assert.ok(Math.hypot(walking.via.x - 0.7, walking.via.y - 0.1) <= 0.45 - 0.03 + 0.011, "and within the arm's reach");
+    assert.deepEqual(await (await fetch("http://127.0.0.1:18080/carry")).json(), {}, "the arm is not asked before the robot is there");
+    robotPose = { ...robotPose, x: walking.via.x * 100, y: walking.via.y * 100, heading: 0 };   // the robot has walked there
+    // The fake robot never walks, so by now the navigator may be in a stuck recovery, which takes about 3 s.
+    for (let i = 0; i < 16 && states.at(-1).mission.state !== "carrying"; i++) await wait(500);
     assert.equal(states.at(-1).mission.state, "carrying");
     const request = await (await fetch("http://127.0.0.1:18080/carry")).json();
     assert.ok(request.id > 0 && request.drops.length >= 1);
-    for (const [x, y] of request.drops) assert.ok(x > 40 && Math.hypot(x - 70, y - 10) <= 30.5, `drop (${x}, ${y}) cm is past the wall and within the arm's reach`);
-    assert.ok(!robotMessages.some((m) => ["forward", "backward", "left", "right"].includes(m.command)), "the robot stands still while it waits for the arm");
+    for (const [x, y] of request.drops) assert.ok(x > 45 + 2 + 10 && Math.hypot(x - 70, y - 10) <= 45.5, `drop (${x}, ${y}) cm is past the wall and within the arm's reach`);
     return request;
   };
   const answerCarry = (body) => fetch("http://127.0.0.1:18080/carry", { method: "POST", body: JSON.stringify(body) });
@@ -147,7 +157,7 @@ try {
   assert.equal(states.at(-1).mission.state, "failed");
   assert.match(states.at(-1).mission.detail, /could not carry the robot: the Sesame is 41 cm/);
   assert.deepEqual(await (await fetch("http://127.0.0.1:18080/carry")).json(), {});
-  console.log("PASS  fully blocked, arm refuses: goto fails with the arm's reason");
+  console.log("PASS  fully blocked, arm refuses: walks to the arm's reach, then goto fails with the arm's reason");
 
   robotMessages.length = 0;
   request = await gotoAcrossWall("c7");
@@ -156,10 +166,10 @@ try {
   await wait(1500);
   assert.equal(states.at(-1).mission.state, "navigating");
   assert.ok(robotMessages.some((m) => ["forward", "backward", "left", "right"].includes(m.command)), "walks on from where the arm set it down");
-  robotPose = { ...robotPose, x: 55, y: 35 };
+  robotPose = { ...robotPose, x: 62, y: 50 };
   await wait(1500);
   assert.equal(states.at(-1).mission.state, "done");
-  console.log("PASS  fully blocked, arm carries: goto continues from the drop point and arrives");
+  console.log("PASS  fully blocked, arm carries: walks to the arm's reach, is carried, continues from the drop point and arrives");
 
   // The limit at the arena's edge is 0.07 m for the robot's centre. The camera sees the robot walk to 0.06 m from
   // the east edge, facing it, so forward is refused and the robot is told to stop. Facing the other way, forward

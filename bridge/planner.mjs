@@ -129,17 +129,28 @@ export function costmap(arena, obstacles, robotRadius = ROBOT_RADIUS_M) {
 // and within `reach` of the arm's base. The nearest to the arm come first, because those are the ones its
 // kinematics most likely reach. Whether the arm really reaches a point is for the arm's own planner to say.
 export const CARRY_SLACK_M = 0.03;
+
+// Every free cell that can be walked to from `fromCell`, in no particular order.
+function connected(grid, fromCell) {
+  const seen = new Uint8Array(grid.blocked.length), queue = [fromCell], cells = [];
+  seen[fromCell] = 1;
+  while (queue.length > 0) {
+    const current = queue.pop();
+    cells.push(current);
+    for (const [next] of grid.neighbours(current)) if (!seen[next]) { seen[next] = 1; queue.push(next); }
+  }
+  return cells;
+}
+
 export function carryTargets(goal, arena, obstacles, armBase, reach, robotRadius = ROBOT_RADIUS_M, count = 5) {
   const grid = buildGrid(arena, obstacles, robotRadius);
   let goalCell = grid.cellOf(goal);
   if (grid.blocked[goalCell]) goalCell = grid.nearestFree(goal);
   if (goalCell < 0) return [];
-  const seen = new Uint8Array(grid.blocked.length), queue = [goalCell], found = [];
-  seen[goalCell] = 1;
-  while (queue.length > 0) {
-    const current = queue.pop(), p = grid.centre(current), distance = Math.hypot(p.x - armBase.x, p.y - armBase.y);
-    if (grid.slackOf[current] >= CARRY_SLACK_M && distance <= reach) found.push({ ...p, distance });
-    for (const [next] of grid.neighbours(current)) if (!seen[next]) { seen[next] = 1; queue.push(next); }
+  const found = [];
+  for (const cell of connected(grid, goalCell)) {
+    const p = grid.centre(cell), distance = Math.hypot(p.x - armBase.x, p.y - armBase.y);
+    if (grid.slackOf[cell] >= CARRY_SLACK_M && distance <= reach) found.push({ ...p, distance });
   }
   found.sort((a, b) => a.distance - b.distance);
   // Spread the choices out: candidates 2 cm apart would all fail for the same reason.
@@ -149,6 +160,24 @@ export function carryTargets(goal, arena, obstacles, armBase, reach, robotRadius
     if (chosen.length >= count) break;
   }
   return chosen;
+}
+
+// Where the robot should walk so that the arm can pick it up: the free cell it can walk to that is PICKUP_INSET_M
+// inside the arm's reach and nearest to where it stands. null when no such cell exists on its side of the obstacle.
+export const PICKUP_INSET_M = 0.03;
+export function pickupTarget(robot, arena, obstacles, armBase, reach, robotRadius = ROBOT_RADIUS_M) {
+  const grid = buildGrid(arena, obstacles, robotRadius);
+  let startCell = grid.cellOf(robot);
+  if (grid.blocked[startCell]) startCell = grid.nearestFree(robot);
+  if (startCell < 0) return null;
+  let best = null, bestDistance = Infinity;
+  for (const cell of connected(grid, startCell)) {
+    const p = grid.centre(cell);
+    if (Math.hypot(p.x - armBase.x, p.y - armBase.y) > reach - PICKUP_INSET_M) continue;
+    const distance = Math.hypot(p.x - robot.x, p.y - robot.y);
+    if (distance < bestDistance) { best = p; bestDistance = distance; }
+  }
+  return best;
 }
 
 // A* over an 8-connected grid. Returns waypoints from start to goal, or null when no walkable path exists.
