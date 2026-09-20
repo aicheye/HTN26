@@ -102,14 +102,26 @@ def solvable(poses):
     return all(ik(p["x"], p["y"], p["z"], p["jaw_yaw"], p["pitch"]) is not None for p in poses)
 
 
+def carry_ok(pick, drop, lift_m, pitch, n=12):
+    """Every pose of lift, carry and lower at this lift and tilt is reachable (sampled along each leg)."""
+    up = {**pick, "z": pick["z"] + lift_m, "pitch": pitch}
+    down = {**drop, "z": drop["z"] + lift_m, "pitch": pitch}
+    legs = [(pick, up), (up, down), (down, drop)]
+    for a, b in legs:
+        for i in range(n + 1):
+            f = i / n
+            q = {k: a[k] + (b[k] - a[k]) * f for k in ("x", "y", "z", "pitch")}
+            if ik(q["x"], q["y"], q["z"], pick["jaw_yaw"], q["pitch"]) is None:
+                return False
+    return True
+
+
 def carry_pitch(pick, drop, lift_m):
-    """The least tilt (closest to the grasp pitch) at which both the lifted pick and the lifted drop are reachable."""
+    """The least tilt (closest to the grasp pitch) at which the whole lift, carry and lower path is reachable."""
     for pitch in CARRY_PITCHES:
         if pitch > pick["pitch"] + 40:
             break
-        a = {**pick, "z": pick["z"] + lift_m, "pitch": pitch}
-        b = {**drop, "z": drop["z"] + lift_m, "pitch": pitch}
-        if solvable([a, b]):
+        if carry_ok(pick, drop, lift_m, pitch):
             return pitch
     return None
 
@@ -122,12 +134,16 @@ def pick_drop(pick, args):
     else:
         offsets = [tuple(args.drop_offset)] if args.drop_offset else DROP_CANDIDATES
         cands = [{**pick, "x": pick["x"] + dx / 100, "y": pick["y"] + dy / 100} for dx, dy in offsets]
-    for cand in cands:
-        if not solvable([cand]):
-            continue
-        pitch = carry_pitch(pick, cand, args.lift / 100)
-        if pitch is not None:
-            return cand, pitch
+    for lift in (args.lift, args.lift * 0.66, args.lift * 0.5, 2.0):           # a lower carry beats no carry
+        for cand in cands:
+            if not solvable([cand]):
+                continue
+            pitch = carry_pitch(pick, cand, lift / 100)
+            if pitch is not None:
+                if lift != args.lift:
+                    print(f"  lift reduced to {lift:.1f} cm so the carry stays in reach")
+                args.lift = lift
+                return cand, pitch
     return None, None
 
 
