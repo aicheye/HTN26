@@ -161,12 +161,12 @@ try {
   assert.equal(states.at(-1).mission.state, "done");
   console.log("PASS  fully blocked, arm carries: goto continues from the drop point and arrives");
 
-  // The strip along the table's edge is closed to the robot. The camera sees the robot walk to 0.10 m from the east
-  // edge, facing it. The closed strip is 0.122 m wide for the robot's centre, so forward is refused, and the
-  // robot is told to stop. Facing the other way, forward is accepted.
+  // The limit at the arena's edge is 0.07 m for the robot's centre. The camera sees the robot walk to 0.06 m from
+  // the east edge, facing it, so forward is refused and the robot is told to stop. Facing the other way, forward
+  // is accepted.
   await fetch("http://127.0.0.1:18080/obstacles", { method: "POST", body: "[]" });
-  while (Math.hypot(robotPose.x - 66, robotPose.y - 30) > 0.5) {
-    const dx = 66 - robotPose.x, dy = 30 - robotPose.y, d = Math.hypot(dx, dy), step = Math.min(1, d);
+  while (Math.hypot(robotPose.x - 70, robotPose.y - 30) > 0.5) {
+    const dx = 70 - robotPose.x, dy = 30 - robotPose.y, d = Math.hypot(dx, dy), step = Math.min(1, d);
     robotPose = { ...robotPose, x: robotPose.x + (dx / d) * step, y: robotPose.y + (dy / d) * step, heading: 0 };
     await wait(60);
   }
@@ -188,7 +188,7 @@ try {
   assert.equal(edgeAcks.at(-1).ok, true);
   client.send(JSON.stringify({ type: "command", data: { id: "e3", ts: 0, robotId: "sesame-1", type: "stop" } }));
   await wait(200);
-  console.log("PASS  closed strip along the edge: forward toward the edge is refused and stopped, forward away from it is accepted");
+  console.log("PASS  limit at the edge: forward toward the edge is refused and stopped, forward away from it is accepted");
   client.close();
 
   // A second bridge whose tracker never answers, as when the camera is off or sees no marker. The robot is

@@ -5,8 +5,7 @@
 // The objects carry their camera photos when a scan of a recording has been saved next to it:
 //   BRIDGE_URL=http://127.0.0.1:9 vision/.venv/bin/python vision/scan.py recordings/rec-006
 // writes recordings/rec-006/obstacles.json. Without that file plain boxes are used.
-// Only two objects, because the robot's centre has a 0.39 m square to move in (planner.mjs): with the nine of
-// rec-006 in place, 5 of 256 goals were walkable.
+// Only two objects: each one blocks its own size plus 0.10 m on every side, so a 0.63 m arena fills up quickly.
 import fs from "node:fs";
 
 const BRIDGE = process.env.BRIDGE_URL ?? "http://localhost:8080";

@@ -33,13 +33,12 @@ export function obstacleHeight(o: Obstacle): number {
   return 0.004;
 }
 
-export const CLOSED_STRIP = "#dc2626";
+export const EDGE_LIMIT = "#dc2626";
 
-/** The strip along the table's edge that is closed to the robot, when the bridge reports one: `strip` is how far it
- *  reaches into the arena (half a corner tag), `limit` is how far the robot's centre stays from the arena's edge. */
-export function closedStrip(arena: { tagSize?: number; edgeMargin?: number; width: number; length: number }) {
+/** How far the robot's centre stays inside the arena, when the bridge reports a limit. Both maps draw it as a line. */
+export function edgeLimit(arena: { edgeMargin?: number; width: number; length: number }) {
   if (!(arena.edgeMargin && arena.edgeMargin > 0) || arena.width <= 2 * arena.edgeMargin || arena.length <= 2 * arena.edgeMargin) return null;
-  return { strip: (arena.tagSize ?? 0.08) / 2, limit: arena.edgeMargin };
+  return arena.edgeMargin;
 }
 
 export const FLOOR = "#e2e8f0";

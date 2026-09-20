@@ -19,7 +19,7 @@ import { WebSocketServer } from "ws";
 import { pixelToFloor } from "../pi/client/floor.js";
 import { GaitEngine } from "./gait.mjs";
 import { Navigator } from "./navigator.mjs";
-import { ROBOT_RADIUS_M, carryTargets, edgeMargin, leavesArena } from "./planner.mjs";
+import { EDGE_MARGIN_M, ROBOT_RADIUS_M, carryTargets, leavesArena } from "./planner.mjs";
 import { PoseFilter } from "./pose-filter.mjs";
 import { createVoiceHandler } from "./voice.mjs";
 
@@ -61,15 +61,15 @@ const savedMotion = fs.existsSync(MOTION_FILE) ? JSON.parse(fs.readFileSync(MOTI
 const drive = { mode: "firmware", gait: "trot", trim: 0, frameDelay: 100, ...(fs.existsSync(DRIVE_FILE) ? JSON.parse(fs.readFileSync(DRIVE_FILE, "utf8")) : {}) };
 const gaitEngine = new GaitEngine((servos) => sendToRobot({ servos }), drive);
 // Every walking command passes through here: manual driving, voice, goto and its stuck recovery. A walk that would
-// take a tracked robot into the closed strip along the table's edge (planner.mjs) is replaced by a stop.
+// take a tracked robot's centre past the limit at the arena's edge (planner.mjs) is replaced by a stop.
 let edgeStops = 0;
 let latestState = null;  // the state of the last 100 ms tick, for the edge check
 // The robot's reach from its marker in metres, legs included. vision/scan.py measures it in the camera picture and
-// posts it to /robot. Obstacle clearance and the closed strip along the edge both grow with it.
+// posts it to /robot. The obstacle clearance grows with it. The limit at the arena's edge is fixed (planner.mjs).
 let robotRadius = ROBOT_RADIUS_M;
 function move(command, face = {}) {
   const robot = latestState?.robots[0];
-  if (robot?.tracking && leavesArena(robot, latestState.arena, command, robotRadius)) {
+  if (robot?.tracking && leavesArena(robot, latestState.arena, command)) {
     edgeStops++;
     move("stop");
     return false;
@@ -196,7 +196,7 @@ function buildState() {
   return {
     schemaVersion: 1, seq: seq++, timestamp: now,
     // edgeMargin is not part of the frontend schema: the robot's centre stays this far inside the arena (planner.mjs)
-    arena: { width: (tracker?.floor[0] ?? 0) / 100, length: (tracker?.floor[1] ?? 0) / 100, cornerTagIds: CORNER_TAGS, edgeMargin: edgeMargin(robotRadius) },
+    arena: { width: (tracker?.floor[0] ?? 0) / 100, length: (tracker?.floor[1] ?? 0) / 100, cornerTagIds: CORNER_TAGS, edgeMargin: EDGE_MARGIN_M },
     calibration: { ok: Boolean(fresh) },
     robots: robot ? [robot] : [],
     obstacles: [...(arm ? [arm] : []), ...cvObstacles, ...manualObstacles],
@@ -215,9 +215,9 @@ function handleCommand(command) {
     return ack(true);
   }
   navigator.cancel();  // any manual command cancels a goto
-  if (latestState?.robots[0]?.tracking && leavesArena(latestState.robots[0], latestState.arena, command.type, robotRadius)) {
+  if (latestState?.robots[0]?.tracking && leavesArena(latestState.robots[0], latestState.arena, command.type)) {
     move("stop");
-    return ack(false, "the strip along the table's edge is closed to the robot");
+    return ack(false, "the robot is at the limit along the table's edge");
   }
   if (MOVES.includes(command.type) || command.type === "stop") sent = move(command.type, command.type === "stop" ? {} : face);
   else if (command.type === "pose") sent = command.pose ? (gaitEngine.set("stop"), sendToRobot({ command: command.pose, ...face })) : null;
@@ -379,7 +379,7 @@ setInterval(() => {
   const state = latestState = buildState();
   // A walk keeps going until the next command, so it is checked on every tick, not only when it starts.
   const walk = (drive.mode === "software" && gaitEngine.command) || (robotState?.command ?? "");
-  if (state.robots[0]?.tracking && leavesArena(state.robots[0], state.arena, walk, robotRadius)) { edgeStops++; move("stop"); }
+  if (state.robots[0]?.tracking && leavesArena(state.robots[0], state.arena, walk)) { edgeStops++; move("stop"); }
   navigator.step(state.robots[0], state.arena, state.obstacles);
   if (navigator.state !== "carrying") carry = null;  // cancelled, timed out, or answered
   const message = JSON.stringify({ type: "state", data: state });

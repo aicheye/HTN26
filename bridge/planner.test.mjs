@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import { CARRY_SLACK_M, CLEARANCE_M, EDGE_MARGIN_M, carryTargets, distanceToObstacle, leavesArena, planPath } from "./planner.mjs";
 
 const arena = { width: 0.76, length: 0.6 };
-// Scenes keep the robot out of the closed 0.122 m strip along the edge, so its centre lives in x 0.122 to 0.638
-// and y 0.122 to 0.478 of this arena.
+// Scenes keep the robot's centre inside the 0.07 m limit at the edge.
 const wall = { shape: "rect", x: 0.38, y: 0.15, yaw: 0, width: 0.04, length: 0.26 };
 const clearOf = (path, obstacles) => {
   for (let i = 0; i < path.length - 1; i++) {
@@ -73,32 +72,32 @@ assert.ok(path && path.length >= 3, "a start inside the clearance still gets a p
 assert.ok(distanceToObstacle(path[1], beside) >= CLEARANCE_M - 0.02, "the first leg leads out of the clearance");
 console.log(`PASS  start inside an obstacle's clearance: steps out first, ${path.length} waypoints`);
 
-// The closed strip along the edge: 0.122 m for the robot's centre. Walking into it or deeper is refused, and
-// walking out of it, along it, and turning are allowed.
-assert.ok(Math.abs(EDGE_MARGIN_M - 0.122) < 1e-9);
+// The limit at the edge: 0.07 m for the robot's centre. Walking past it or further past it is refused, and
+// walking back inside, along it, and turning are allowed.
+assert.ok(Math.abs(EDGE_MARGIN_M - 0.07) < 1e-9);
 const east = 0, west = Math.PI, north = Math.PI / 2;
-assert.equal(leavesArena({ x: 0.5, y: 0.3, yaw: east }, square, "forward"), true, "0.5 + 0.02 crosses 0.63 - 0.122 = 0.508");
-assert.equal(leavesArena({ x: 0.4, y: 0.3, yaw: east }, square, "forward"), false);
-assert.equal(leavesArena({ x: 0.55, y: 0.3, yaw: east }, square, "forward"), true, "already inside the strip, going deeper");
-assert.equal(leavesArena({ x: 0.55, y: 0.3, yaw: west }, square, "forward"), false, "walking out of the strip");
-assert.equal(leavesArena({ x: 0.55, y: 0.3, yaw: west }, square, "backward"), true, "backing deeper into the strip");
-assert.equal(leavesArena({ x: 0.55, y: 0.3, yaw: north }, square, "forward"), false, "walking along the strip");
-assert.equal(leavesArena({ x: 0.55, y: 0.3, yaw: east }, square, "left"), false, "turning is always allowed");
+assert.equal(leavesArena({ x: 0.55, y: 0.3, yaw: east }, square, "forward"), true, "0.55 + 0.02 crosses 0.63 - 0.07 = 0.56");
+assert.equal(leavesArena({ x: 0.45, y: 0.3, yaw: east }, square, "forward"), false);
+assert.equal(leavesArena({ x: 0.6, y: 0.3, yaw: east }, square, "forward"), true, "already past the limit, going further");
+assert.equal(leavesArena({ x: 0.6, y: 0.3, yaw: west }, square, "forward"), false, "walking back inside");
+assert.equal(leavesArena({ x: 0.6, y: 0.3, yaw: west }, square, "backward"), true, "backing further out");
+assert.equal(leavesArena({ x: 0.6, y: 0.3, yaw: north }, square, "forward"), false, "walking along the edge");
+assert.equal(leavesArena({ x: 0.6, y: 0.3, yaw: east }, square, "left"), false, "turning is always allowed");
 for (const from of [{ x: 0.2, y: 0.2 }, { x: 0.03, y: 0.03 }, { x: 0.6, y: 0.31 }]) {
   path = planPath(from, { x: 0.62, y: 0.62 }, square, []);
-  path.slice(from.x === 0.2 ? 0 : 1).forEach((p) => assert.ok(Math.min(p.x, square.width - p.x, p.y, square.length - p.y) >= EDGE_MARGIN_M - 0.011, `waypoint ${JSON.stringify(p)} is in the strip`));
+  path.slice(from.x === 0.2 ? 0 : 1).forEach((p) => assert.ok(Math.min(p.x, square.width - p.x, p.y, square.length - p.y) >= EDGE_MARGIN_M - 0.011, `waypoint ${JSON.stringify(p)} is past the limit`));
 }
-console.log("PASS  closed strip along the edge: no waypoint in it, no walking into it, walking out allowed");
+console.log("PASS  limit at the edge: no waypoint past it, no walking past it, walking back inside allowed");
 
 // From Angus's branch: the navigator reports when the goal had to be moved, and a robot at the wall can leave.
 const nearWall = planPath({ x: 0.3, y: 0.3 }, { x: 0.755, y: 0.3 }, arena, []);
 assert.ok(nearWall.goalMoved && nearWall.at(-1).x <= arena.width - EDGE_MARGIN_M + 0.02, "goal against a wall is pulled back to reachable floor");
 assert.equal(planPath({ x: 0.3, y: 0.3 }, { x: 0.5, y: 0.3 }, arena, []).goalMoved, false);
-console.log("PASS  goal in the closed strip: moved to the nearest reachable spot");
+console.log("PASS  goal past the limit at the edge: moved to the nearest reachable spot");
 
 const escape = planPath({ x: 0.03, y: 0.3 }, { x: 0.5, y: 0.3 }, arena, []);
 assert.ok(escape && escape.at(-1).x === 0.5, "a robot already touching the wall can still leave");
-console.log("PASS  robot starting inside the closed strip can plan out of it");
+console.log("PASS  robot starting past the limit at the edge can plan its way back");
 
 // A wall across the whole arena, the robot on its left, the goal and the arm's base on its right. No path exists,
 // so the arm is offered places to set the robot down: on the goal's side, clear of every limit, within its reach.

@@ -37,7 +37,7 @@ function simulate({ start, goal, obstacles = [], motion, robotModel = {}, blocke
   return { navigator, robot, seconds: now / 1000, switches, sent, pending };
 }
 
-// Starts and goals keep out of the closed 0.122 m strip along the edge (planner.mjs). A goal inside it is moved.
+// Starts and goals keep inside the 0.07 m limit at the edge (planner.mjs). A goal past it is moved.
 let run = simulate({ start: { x: 0.15, y: 0.15, yaw: Math.PI }, goal: { x: 0.6, y: 0.45 } });
 assert.equal(run.navigator.state, "done");
 assert.ok(Math.hypot(run.robot.x - 0.6, run.robot.y - 0.45) < 0.07, "ends near the goal");

@@ -1,6 +1,6 @@
 // Grid path planner over the arena. Pure functions, all units metres and radians, frontend frame.
 // The soft cost near obstacles, the table edge as a limit, and the rescue of a start that is too close to an
-// obstacle follow Arjun's nav/planner.py.
+// obstacle follow Arjun's nav/planner.py. The limit at the arena's edge is Angus's.
 
 export const CELL_M = 0.02;
 // How far the robot reaches from its marker. 0.082 m is the body's half-diagonal. vision/scan.py measures the real
@@ -8,14 +8,14 @@ export const CELL_M = 0.02;
 export const ROBOT_RADIUS_M = 0.082;
 const CLEARANCE_EXTRA_M = 0.018;
 export const CLEARANCE_M = ROBOT_RADIUS_M + CLEARANCE_EXTRA_M;  // obstacles grow by the robot's reach plus a margin
-// The strip of table that holds the corner markers is closed to the robot: no part of it may ever be there. The
-// arena is the rectangle between the marker centres, and the markers are TAG_M wide and flush with the table's
-// corners. The strip therefore reaches TAG_M / 2 into the arena, and the robot's centre has to stay its reach
-// further in: 0.04 + 0.082 = 0.122 m from the arena's edge. On a 0.63 m arena that leaves a 0.386 m square for
-// the centre. This is a hard limit for planning (below) and for walking (leavesArena).
-export const TAG_M = 0.08;
-export const edgeMargin = (robotRadius = ROBOT_RADIUS_M) => TAG_M / 2 + robotRadius;
-export const EDGE_MARGIN_M = edgeMargin();
+// The robot's centre cannot get closer than this to the arena's edge: half its 0.125 m length plus a margin. This
+// is Angus's limit from the frontend branch, and the one limit at the edge for everything: planning (below),
+// walking (leavesArena), the voice commands (src/state/voiceCommands.ts) and the line both maps draw. It does not
+// grow with the measured robot radius. A stricter one, 0.122 m, which kept every part of the robot off the strip
+// that holds the corner markers, left a 0.39 m square on a 0.63 m arena and few goals walkable among objects.
+// With 0.07 m the robot's corners can reach 1.2 cm past the arena's edge, over the markers' strip. The table
+// itself ends 4 cm past that edge.
+export const EDGE_MARGIN_M = 0.07;
 // A free cell costs up to 1 + SOFT_WEIGHT times its length right at a limit, falling to 1 SOFT_BAND_M further out.
 // This centres paths in gaps, where a plain shortest path runs along the limit and any walking error puts the
 // robot against the obstacle. The band is 5 cm because the robot's centre only has a 0.386 m square to move in:
@@ -54,23 +54,23 @@ export function distanceToObstacle(p, obstacle) {
   return ox <= 0 && oy <= 0 ? Math.max(ox, oy) : Math.hypot(Math.max(ox, 0), Math.max(oy, 0));
 }
 
-// How far a point is inside the closed strip along the arena's edge. 0 when it is outside the strip.
-function edgeDepth(p, arena, margin) {
-  return Math.max(0, margin - Math.min(p.x, arena.width - p.x, p.y, arena.length - p.y));
+// How far a point is past the limit at the arena's edge. 0 when it is inside the limit.
+function edgeDepth(p, arena) {
+  return Math.max(0, EDGE_MARGIN_M - Math.min(p.x, arena.width - p.x, p.y, arena.length - p.y));
 }
 
-// True when walking with this command takes the robot into the closed strip, or deeper into it. Turning is always
-// allowed, and so is walking out of the strip or along it, so that a robot that ended up there can leave.
-export function leavesArena(robot, arena, command, robotRadius = ROBOT_RADIUS_M) {
+// True when walking with this command takes the robot's centre past the limit at the edge, or further past it.
+// Turning is always allowed, and so is walking back inside or along the edge, so that a robot out there can return.
+export function leavesArena(robot, arena, command) {
   if ((command !== "forward" && command !== "backward") || !(arena?.width > 0 && arena?.length > 0)) return false;
   const sign = command === "forward" ? 1 : -1, ahead = 0.02;
   const next = { x: robot.x + sign * Math.cos(robot.yaw) * ahead, y: robot.y + sign * Math.sin(robot.yaw) * ahead };
-  return edgeDepth(next, arena, edgeMargin(robotRadius)) > edgeDepth(robot, arena, edgeMargin(robotRadius)) + 1e-9;
+  return edgeDepth(next, arena) > edgeDepth(robot, arena) + 1e-9;
 }
 
 // The arena as a grid: which cells the robot's centre may be in, and what each free cell costs.
 function buildGrid(arena, obstacles, robotRadius) {
-  const clearance = robotRadius + CLEARANCE_EXTRA_M, margin = edgeMargin(robotRadius);
+  const clearance = robotRadius + CLEARANCE_EXTRA_M, margin = EDGE_MARGIN_M;
   const cols = Math.max(1, Math.ceil(arena.width / CELL_M)), rows = Math.max(1, Math.ceil(arena.length / CELL_M));
   const centre = (i) => ({ x: ((i % cols) + 0.5) * CELL_M, y: (Math.floor(i / cols) + 0.5) * CELL_M });
   const cellOf = (p) => {

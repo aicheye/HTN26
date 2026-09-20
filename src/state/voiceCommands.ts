@@ -15,7 +15,7 @@ export const MAX_PLAN_STEPS = 4;
 export const MAX_WALK_CM = 60;
 export const MIN_TURN_DEG = 5;
 export const MAX_TURN_DEG = 360;
-const EDGE_MARGIN_M = 0.07; // matches the bridge planner: the robot's centre cannot get closer to a wall than this
+const EDGE_MARGIN_M = 0.07; // the same value as EDGE_MARGIN_M in bridge/planner.mjs: the robot's centre cannot get closer to a wall than this
 export type Landmark = { name: string } & (
   | { kind: "point"; point: Point }
   | { kind: "obstacle"; obstacleId: string }
