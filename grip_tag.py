@@ -47,7 +47,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tracker"); ap.add_argument("--port", default=default_port())
     ap.add_argument("--grip-z", type=float, default=9.0, help="cm above the arm's base where the jaws close (demo: 9.0)")
-    ap.add_argument("--jaw-angle", type=float, default=90.0, help="jaw axis relative to the tag heading; 90/-90 across the body with the jaws swapped, 0 along")
+    ap.add_argument("--jaw-angle", type=float, default=0.0, help="wrist roll relative to the tag: 0 = the jaw axis points the way the tag's top edge points (matches the tag's orientation); 90 or -90 = across it, jaws swapped; 180 = along it, jaws swapped")
     ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[0.0, 0.0], help="the arm's base relative to its tag (cm)")
     ap.add_argument("--hover", type=float, default=5.0); ap.add_argument("--lift", type=float, default=5.0)
     ap.add_argument("--dry-run", action="store_true")
@@ -67,9 +67,11 @@ def main():
     ahead = d @ [np.cos(th), np.sin(th)]
     left = d @ [-np.sin(th), np.cos(th)]
     x, y = ahead - args.tag_offset[0], left - args.tag_offset[1]
-    jaw = (r["heading"] - a["heading"] + args.jaw_angle + 180) % 360 - 180
+    tag_rel = (r["heading"] - a["heading"] + 180) % 360 - 180        # the tag's orientation in the arm's frame
+    jaw = (tag_rel + args.jaw_angle + 180) % 360 - 180
     print(f"2. tag centre relative to the arm's tag: {ahead:.1f} cm ahead, {left:+.1f} cm left; Sesame heading {r['heading'] - a['heading']:+.1f} deg relative to the arm")
-    print(f"3. target in the arm's frame: x={x:.1f} y={y:.1f} z={args.grip_z:.1f} cm, jaws at {jaw:+.1f} deg, {np.hypot(x, y):.1f} cm from the base")
+    print(f"3. target in the arm's frame: x={x:.1f} y={y:.1f} z={args.grip_z:.1f} cm, {np.hypot(x, y):.1f} cm from the base")
+    print(f"   wrist: tag orientation {tag_rel:+.1f} deg in the arm's frame, jaw axis = tag {args.jaw_angle:+.0f} = {jaw:+.1f} deg")
 
     q_grip, pitch = solve(x, y, args.grip_z, jaw)
     if q_grip is None:
@@ -81,7 +83,9 @@ def main():
     f = fk(q_grip)
     print(f"4. IK: grip pitch {pitch} deg" + (" (straight down)" if pitch == -90 else " (tilted to reach)") + f", hover pitch {p_hover}, lift pitch {p_lift}")
     print(f"   joints at the grip: " + "  ".join(f"{j.split('_')[0]}={q_grip[j]:.1f}" for j in JOINTS))
-    print(f"   check, FK of those joints: x={100*f['x']:.1f} y={100*f['y']:.1f} z={100*f['z']:.1f} cm, jaws {f['jaw_yaw']:+.1f} deg")
+    got = (f["jaw_yaw"] - tag_rel + 180) % 360 - 180
+    print(f"   check, FK of those joints: x={100*f['x']:.1f} y={100*f['y']:.1f} z={100*f['z']:.1f} cm, jaw axis {f['jaw_yaw']:+.1f} deg = tag {got:+.1f} deg"
+          + ("  MATCH" if abs(got - args.jaw_angle) < 0.5 else "  MISMATCH"))
     if args.dry_run:
         return 0
 
