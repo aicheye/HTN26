@@ -68,9 +68,8 @@ export function leavesArena(robot, arena, command, robotRadius = ROBOT_RADIUS_M)
   return edgeDepth(next, arena, edgeMargin(robotRadius)) > edgeDepth(robot, arena, edgeMargin(robotRadius)) + 1e-9;
 }
 
-// A* over an 8-connected grid. Returns waypoints from start to goal, or null when no walkable path exists.
-// A goal inside an obstacle (for example "go to the chocolate") is replaced by the nearest free cell.
-export function planPath(start, goal, arena, obstacles, robotRadius = ROBOT_RADIUS_M) {
+// The arena as a grid: which cells the robot's centre may be in, and what each free cell costs.
+function buildGrid(arena, obstacles, robotRadius) {
   const clearance = robotRadius + CLEARANCE_EXTRA_M, margin = edgeMargin(robotRadius);
   const cols = Math.max(1, Math.ceil(arena.width / CELL_M)), rows = Math.max(1, Math.ceil(arena.length / CELL_M));
   const centre = (i) => ({ x: ((i % cols) + 0.5) * CELL_M, y: (Math.floor(i / cols) + 0.5) * CELL_M });
@@ -78,12 +77,13 @@ export function planPath(start, goal, arena, obstacles, robotRadius = ROBOT_RADI
     const cx = Math.min(cols - 1, Math.max(0, Math.floor(p.x / CELL_M))), cy = Math.min(rows - 1, Math.max(0, Math.floor(p.y / CELL_M)));
     return cy * cols + cx;
   };
-  const blocked = new Uint8Array(cols * rows), cellCost = new Float32Array(cols * rows);
+  const blocked = new Uint8Array(cols * rows), cellCost = new Float32Array(cols * rows), slackOf = new Float32Array(cols * rows);
   for (let i = 0; i < blocked.length; i++) {
     const p = centre(i);
     // slack: how far the robot's centre is beyond the nearest limit, an obstacle's clearance or the table edge
     let slack = Math.min(p.x, arena.width - p.x, p.y, arena.length - p.y) - margin;
     for (const o of obstacles) slack = Math.min(slack, distanceToObstacle(p, o) - clearance);
+    slackOf[i] = slack;
     blocked[i] = slack < 0 ? 1 : 0;
     cellCost[i] = 1 + SOFT_WEIGHT * Math.max(0, Math.min(1, 1 - slack / SOFT_BAND_M));
   }
@@ -96,6 +96,55 @@ export function planPath(start, goal, arena, obstacles, robotRadius = ROBOT_RADI
     }
     return best;
   };
+  // Free neighbours of a cell. No cutting diagonally between two blocked cells.
+  const neighbours = (current) => {
+    const cx = current % cols, cy = Math.floor(current / cols), out = [];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = cx + dx, ny = cy + dy;
+        if ((dx === 0 && dy === 0) || nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+        const next = ny * cols + nx;
+        if (blocked[next] || (dx !== 0 && dy !== 0 && (blocked[cy * cols + nx] || blocked[ny * cols + cx]))) continue;
+        out.push([next, Math.hypot(dx, dy)]);
+      }
+    }
+    return out;
+  };
+  return { cols, rows, centre, cellOf, blocked, cellCost, slackOf, nearestFree, neighbours };
+}
+
+// Where an arm can set the robot down so that it can walk to the goal, for when no path exists from where it
+// stands. Returns up to `count` points, best first, or [] when there is none: free cells that are connected to the
+// goal, at least CARRY_SLACK_M clear of every limit so that a drop that is a little off still lands on free floor,
+// and within `reach` of the arm's base. The nearest to the arm come first, because those are the ones its
+// kinematics most likely reach. Whether the arm really reaches a point is for the arm's own planner to say.
+export const CARRY_SLACK_M = 0.03;
+export function carryTargets(goal, arena, obstacles, armBase, reach, robotRadius = ROBOT_RADIUS_M, count = 5) {
+  const grid = buildGrid(arena, obstacles, robotRadius);
+  let goalCell = grid.cellOf(goal);
+  if (grid.blocked[goalCell]) goalCell = grid.nearestFree(goal);
+  if (goalCell < 0) return [];
+  const seen = new Uint8Array(grid.blocked.length), queue = [goalCell], found = [];
+  seen[goalCell] = 1;
+  while (queue.length > 0) {
+    const current = queue.pop(), p = grid.centre(current), distance = Math.hypot(p.x - armBase.x, p.y - armBase.y);
+    if (grid.slackOf[current] >= CARRY_SLACK_M && distance <= reach) found.push({ ...p, distance });
+    for (const [next] of grid.neighbours(current)) if (!seen[next]) { seen[next] = 1; queue.push(next); }
+  }
+  found.sort((a, b) => a.distance - b.distance);
+  // Spread the choices out: candidates 2 cm apart would all fail for the same reason.
+  const chosen = [];
+  for (const p of found) {
+    if (chosen.every((q) => Math.hypot(p.x - q.x, p.y - q.y) >= 0.06)) chosen.push({ x: p.x, y: p.y });
+    if (chosen.length >= count) break;
+  }
+  return chosen;
+}
+
+// A* over an 8-connected grid. Returns waypoints from start to goal, or null when no walkable path exists.
+// A goal inside an obstacle (for example "go to the chocolate") is replaced by the nearest free cell.
+export function planPath(start, goal, arena, obstacles, robotRadius = ROBOT_RADIUS_M) {
+  const { cols, rows, centre, cellOf, blocked, cellCost, nearestFree, neighbours } = buildGrid(arena, obstacles, robotRadius);
   // A robot that stands closer to an obstacle or the edge than the limit first walks straight to the nearest free
   // cell. Treating only its own cell as free left it walled in by blocked neighbours, and the plan failed.
   let startCell = cellOf(start);
@@ -121,20 +170,12 @@ export function planPath(start, goal, arena, obstacles, robotRadius = ROBOT_RADI
     }
     if (current === goalCell) break;
     open.delete(current);
-    const cx = current % cols, cy = Math.floor(current / cols);
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const nx = cx + dx, ny = cy + dy;
-        if ((dx === 0 && dy === 0) || nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
-        const next = ny * cols + nx;
-        // no cutting diagonally between two blocked cells
-        if (blocked[next] || (dx !== 0 && dy !== 0 && (blocked[cy * cols + nx] || blocked[ny * cols + cx]))) continue;
-        const candidate = cost[current] + Math.hypot(dx, dy) * (cellCost[current] + cellCost[next]) / 2;
-        if (candidate < cost[next]) {
-          cost[next] = candidate;
-          from[next] = current;
-          open.add(next);
-        }
+    for (const [next, step] of neighbours(current)) {
+      const candidate = cost[current] + step * (cellCost[current] + cellCost[next]) / 2;
+      if (candidate < cost[next]) {
+        cost[next] = candidate;
+        from[next] = current;
+        open.add(next);
       }
     }
   }

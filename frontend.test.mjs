@@ -1060,6 +1060,10 @@ test("Live arm mounts on the edge nearest its tag, and the camera's detection of
   assert.deepEqual(state.obstacles.map((o) => o.id), ["yellow-box-5", "green-box-2", "manual-1"]);
   const north = withArm({ arena: { width: 0.63, length: 0.63 }, robots: [], obstacles: [{ ...obstacles[0], x: 0.3, y: 0.7 }] });
   assert.equal(north.arm.mount.side, "north");
+  assert.equal(state.arm.mode, "idle");
+  const waiting = withArm({ arena: { width: 0.63, length: 0.63 }, robots: [{ id: "sesame-1" }], obstacles, mission: { state: "carrying", carry: { id: 1, drops: [{ x: 0.2, y: 0.3 }] } } });
+  assert.equal(waiting.arm.mode, "carrying");
+  assert.equal(waiting.arm.targetRobotId, "sesame-1");
 });
 
 test("Measured turns and walks stop from camera feedback and refuse to leave the table", (t) => {

@@ -32,6 +32,8 @@ const RECOVER_BACK_MS = 1200;
 const RECOVER_TURN_MS = 1200;
 const MAX_RECOVERIES = 3;
 const MAX_FAILED_PLANS = 3;
+const MAX_CARRIES = 2;            // per goto: a second fully blocked stretch may need a second carry, more is a loop
+const CARRY_TIMEOUT_MS = 120000;  // the arm's grip, lift, carry and release take about 30 s, plus the time to be noticed
 const LOST_TIMEOUT_MS = 10000;
 const NO_PROGRESS_MS = 30000;   // give up when the remaining route has not shrunk by this much in this long
 const NO_PROGRESS_MIN = 0.03;
@@ -43,6 +45,9 @@ export class Navigator {
     this.send = send;  // (command string) => void
     this.motion = { ...DEFAULT_MOTION, ...motion };
     this.robotRadius = undefined;  // metres, set by the bridge once the camera has measured the robot
+    // Set by the bridge: (goal) => true when an arm has been asked to carry the robot to where it can reach the
+    // goal from. Without it, a goto with no walkable path fails as before.
+    this.requestCarry = null;
     this.state = "idle";  // idle, navigating, recovering, calibrating, done, failed
     this.detail = "";
     this.goal = null;
@@ -56,7 +61,14 @@ export class Navigator {
   }
 
   start(goal) {
-    Object.assign(this, { goal, path: [], state: "navigating", detail: "", recoveries: 0, failedPlans: 0, plannedAt: 0, lostSince: 0, progress: null, watch: null });
+    Object.assign(this, { goal, path: [], state: "navigating", detail: "", recoveries: 0, failedPlans: 0, plannedAt: 0, lostSince: 0, progress: null, watch: null, carries: 0 });
+  }
+
+  // The arm's answer to a carry request. After a carry the robot stands somewhere new, so planning starts over.
+  carried(ok, reason = "") {
+    if (this.state !== "carrying") return;
+    if (!ok) return this.finish("failed", `no walkable path, and the arm could not carry the robot: ${reason || "no reason given"}`);
+    Object.assign(this, { state: "navigating", detail: "", path: [], failedPlans: 0, plannedAt: 0, lostSince: 0, progress: null, watch: null });
   }
 
   cancel() {
@@ -80,6 +92,11 @@ export class Navigator {
 
   step(robot, arena, obstacles, now = Date.now()) {
     if (this.state === "calibrating") return this.stepCalibration(robot, now);
+    if (this.state === "carrying") {
+      // The robot's marker is hidden while the gripper holds it, so being lost does not count here.
+      if (now - this.carryAt > CARRY_TIMEOUT_MS) this.finish("failed", "no walkable path, and no arm answered the request to carry the robot");
+      return;
+    }
     if (this.state !== "navigating" && this.state !== "recovering") return;
     if (!robot?.tracking) {
       this.setDrive("stop", now);
@@ -95,8 +112,13 @@ export class Navigator {
       const planned = planPath(robot, this.goal, arena, obstacles, this.robotRadius);
       this.plannedAt = now;
       if (!planned) {
-        if (++this.failedPlans >= MAX_FAILED_PLANS) this.finish("failed", "no walkable path to the goal");
-        else this.setDrive("stop", now);
+        if (++this.failedPlans < MAX_FAILED_PLANS) return this.setDrive("stop", now);
+        if (this.carries < MAX_CARRIES && this.requestCarry?.(this.goal)) {
+          this.setDrive("stop", now);
+          Object.assign(this, { state: "carrying", detail: "no walkable path: waiting for the arm to carry the robot past the obstacle", carryAt: now, carries: this.carries + 1, path: [], drive: "" });
+          return;
+        }
+        this.finish("failed", "no walkable path to the goal");
         return;
       }
       this.failedPlans = 0;

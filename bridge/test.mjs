@@ -122,6 +122,45 @@ try {
   assert.notEqual(first.textureUrl, second.textureUrl);
   assert.equal(await (await fetch(second.textureUrl)).text(), "picture two");
   console.log("PASS  obstacle picture: served by URL, and the URL changes only with the picture");
+  // The same wall, with the goal on the arm's side of it (the fake tracker reports the arm's base at 0.70, 0.10).
+  // No path exists, so the bridge asks the arm to carry the robot, and offers drop points in the tracker's frame.
+  const gotoAcrossWall = async (id) => {
+    await fetch("http://127.0.0.1:18080/obstacles", { method: "POST", body: JSON.stringify([{ shape: "rect", x: 0.3, y: 0.3, width: 0.04, length: 0.6 }]) });
+    robotPose = { ...robotPose, x: 15, y: 30, heading: 0 };
+    await wait(1200);
+    client.send(JSON.stringify({ type: "command", data: { id, ts: 0, robotId: "sesame-1", type: "goto", target: { x: 0.55, y: 0.35 } } }));
+    await wait(3500);
+    assert.equal(states.at(-1).mission.state, "carrying");
+    const request = await (await fetch("http://127.0.0.1:18080/carry")).json();
+    assert.ok(request.id > 0 && request.drops.length >= 1);
+    for (const [x, y] of request.drops) assert.ok(x > 40 && Math.hypot(x - 70, y - 10) <= 30.5, `drop (${x}, ${y}) cm is past the wall and within the arm's reach`);
+    assert.ok(!robotMessages.some((m) => ["forward", "backward", "left", "right"].includes(m.command)), "the robot stands still while it waits for the arm");
+    return request;
+  };
+  const answerCarry = (body) => fetch("http://127.0.0.1:18080/carry", { method: "POST", body: JSON.stringify(body) });
+
+  robotMessages.length = 0;
+  let request = await gotoAcrossWall("c6");
+  assert.equal((await answerCarry({ id: request.id + 7, ok: true })).status, 409);
+  await answerCarry({ id: request.id, ok: false, reason: "the Sesame is 41 cm from the arm's base, out of reach" });
+  await wait(300);
+  assert.equal(states.at(-1).mission.state, "failed");
+  assert.match(states.at(-1).mission.detail, /could not carry the robot: the Sesame is 41 cm/);
+  assert.deepEqual(await (await fetch("http://127.0.0.1:18080/carry")).json(), {});
+  console.log("PASS  fully blocked, arm refuses: goto fails with the arm's reason");
+
+  robotMessages.length = 0;
+  request = await gotoAcrossWall("c7");
+  robotPose = { ...robotPose, x: request.drops[0][0], y: request.drops[0][1], heading: 90 };   // the arm has set it down
+  await answerCarry({ id: request.id, ok: true });
+  await wait(1500);
+  assert.equal(states.at(-1).mission.state, "navigating");
+  assert.ok(robotMessages.some((m) => ["forward", "backward", "left", "right"].includes(m.command)), "walks on from where the arm set it down");
+  robotPose = { ...robotPose, x: 55, y: 35 };
+  await wait(1500);
+  assert.equal(states.at(-1).mission.state, "done");
+  console.log("PASS  fully blocked, arm carries: goto continues from the drop point and arrives");
+
   // The strip along the table's edge is closed to the robot. The camera sees the robot walk to 0.10 m from the east
   // edge, facing it. The closed strip is 0.122 m wide for the robot's centre, so forward is refused, and the
   // robot is told to stop. Facing the other way, forward is accepted.

@@ -19,7 +19,7 @@ import { WebSocketServer } from "ws";
 import { pixelToFloor } from "../pi/client/floor.js";
 import { GaitEngine } from "./gait.mjs";
 import { Navigator } from "./navigator.mjs";
-import { ROBOT_RADIUS_M, edgeMargin, leavesArena } from "./planner.mjs";
+import { ROBOT_RADIUS_M, carryTargets, edgeMargin, leavesArena } from "./planner.mjs";
 import { PoseFilter } from "./pose-filter.mjs";
 import { createVoiceHandler } from "./voice.mjs";
 
@@ -80,6 +80,20 @@ function move(command, face = {}) {
   return robotSocket?.readyState === WebSocket.OPEN;
 }
 const navigator = new Navigator((command) => move(command), savedMotion);
+// When goto finds no walkable path, the arm is asked to lift the robot to a place it can reach the goal from. The
+// request waits here for whatever drives the arm (arm_carry.py) to fetch it with GET /carry and answer it with
+// POST /carry. The arm's own planner decides whether it reaches a drop point, so several are offered, the ones
+// nearest its base first. ARM_REACH_M only limits how far from the base they are looked for.
+const ARM_REACH_M = Number(process.env.ARM_REACH_M ?? 0.3);
+let carry = null, carryId = 0;
+navigator.requestCarry = (goal) => {
+  if (!lastArm || !latestState) return false;
+  const drops = carryTargets(goal, latestState.arena, latestState.obstacles, lastArm, ARM_REACH_M, robotRadius);
+  if (drops.length === 0) return false;
+  carry = { id: ++carryId, goal, drops, requestedAt: Date.now() };
+  console.log(`carry ${carry.id}: no walkable path, asking the arm to set the robot down at one of ${JSON.stringify(drops)}`);
+  return true;
+};
 
 // The robot pose shown and used for navigation comes from a Kalman filter over the tracker's detections
 // (pose-filter.mjs). markerHeight is the height of the robot's marker above the floor in cm: 10.5, measured on the
@@ -99,6 +113,12 @@ function onTrackerFrame(frame) {
 // Tracker frame: centimetres, origin at floor marker 1, x toward marker 2, y toward marker 4.
 // Frontend frame: metres, +y up the screen, yaw counter-clockwise seen from above. When the markers
 // run clockwise seen from above (zUp false), y and the rotation direction are mirrored.
+// The reverse of toWorld for a point: the frontend's metres to the tracker's floor frame in cm.
+function toFloorCm(p) {
+  const mirrored = tracker && tracker.zUp === false;
+  return [Math.round(p.x * 1000) / 10, Math.round((mirrored ? tracker.floor[1] - p.y * 100 : p.y * 100) * 10) / 10];
+}
+
 function toWorld(x, y, headingDeg = 0) {
   const mirrored = tracker && tracker.zUp === false;
   const lengthCm = tracker ? tracker.floor[1] : 0;
@@ -181,7 +201,7 @@ function buildState() {
     robots: robot ? [robot] : [],
     obstacles: [...(arm ? [arm] : []), ...cvObstacles, ...manualObstacles],
     ...(navigator.goal ? { goal: navigator.goal, path: robot ? [{ x: robot.x, y: robot.y }, ...navigator.path] : navigator.path } : {}),
-    mission: { ...navigator.status(), edgeStops, robotRadius },  // not part of the frontend schema: navigation state for display and debugging
+    mission: { ...navigator.status(), edgeStops, robotRadius, ...(carry ? { carry: { id: carry.id, drops: carry.drops } } : {}) },  // not part of the frontend schema: navigation state for display and debugging
   };
 }
 
@@ -252,6 +272,26 @@ const server = http.createServer((request, response) => {
     return response.end(png);
   }
   if (request.url === "/objects" && request.method === "GET") return reply(200, cvObstacles);
+  // The pending carry request for the arm, with the drop points in the tracker's floor frame in cm, or {}.
+  if (request.url === "/carry" && request.method === "GET") {
+    return reply(200, carry ? { id: carry.id, drops: carry.drops.map(toFloorCm), ageMs: Date.now() - carry.requestedAt } : {});
+  }
+  if (request.url === "/carry" && request.method === "POST") {
+    let text = "";
+    request.on("data", (chunk) => { text += chunk; });
+    request.on("end", () => {
+      try {
+        const answer = JSON.parse(text);
+        if (!carry || answer.id !== carry.id) return reply(409, { error: "no carry request with this id is waiting" });
+        console.log(`carry ${carry.id}: ${answer.ok ? "done" : `refused: ${answer.reason}`}`);
+        carry = null;
+        poseFilter.state = null;  // the robot was lifted to a new place: the next detection is its pose, not a wild one
+        navigator.carried(Boolean(answer.ok), answer.reason);
+        reply(200, navigator.status());
+      } catch (error) { reply(400, { error: error.message }); }
+    });
+    return;
+  }
   if (request.url === "/robot" && request.method === "GET") return reply(200, { radius: robotRadius });
   if (request.url === "/robot" && request.method === "POST") {
     let text = "";
@@ -341,6 +381,7 @@ setInterval(() => {
   const walk = (drive.mode === "software" && gaitEngine.command) || (robotState?.command ?? "");
   if (state.robots[0]?.tracking && leavesArena(state.robots[0], state.arena, walk, robotRadius)) { edgeStops++; move("stop"); }
   navigator.step(state.robots[0], state.arena, state.obstacles);
+  if (navigator.state !== "carrying") carry = null;  // cancelled, timed out, or answered
   const message = JSON.stringify({ type: "state", data: state });
   for (const socket of sockets.clients) if (socket.readyState === WebSocket.OPEN) socket.send(message);
 }, 100);

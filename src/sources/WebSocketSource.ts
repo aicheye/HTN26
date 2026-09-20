@@ -134,7 +134,11 @@ export function withArm(state: WorldState): WorldState {
   return {
     ...state,
     obstacles: state.obstacles.filter((o) => !isArm(o)),
-    arm: { mount, joints: ARM_REST_POSE, mode: "idle" },
+    // The bridge has no joint telemetry, so the arm is drawn at rest. Its mode still says when it has been asked
+    // to carry the robot past an obstacle, which both maps show as a label.
+    arm: state.mission?.state === "carrying"
+      ? { mount, joints: ARM_REST_POSE, mode: "carrying", targetRobotId: state.robots[0]?.id }
+      : { mount, joints: ARM_REST_POSE, mode: "idle" },
   };
 }
 

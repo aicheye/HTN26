@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { CLEARANCE_M, EDGE_MARGIN_M, distanceToObstacle, leavesArena, planPath } from "./planner.mjs";
+import { CARRY_SLACK_M, CLEARANCE_M, EDGE_MARGIN_M, carryTargets, distanceToObstacle, leavesArena, planPath } from "./planner.mjs";
 
 const arena = { width: 0.76, length: 0.6 };
 // Scenes keep the robot out of the closed 0.122 m strip along the edge, so its centre lives in x 0.122 to 0.638
@@ -99,3 +99,19 @@ console.log("PASS  goal in the closed strip: moved to the nearest reachable spot
 const escape = planPath({ x: 0.03, y: 0.3 }, { x: 0.5, y: 0.3 }, arena, []);
 assert.ok(escape && escape.at(-1).x === 0.5, "a robot already touching the wall can still leave");
 console.log("PASS  robot starting inside the closed strip can plan out of it");
+
+// A wall across the whole arena, the robot on its left, the goal and the arm's base on its right. No path exists,
+// so the arm is offered places to set the robot down: on the goal's side, clear of every limit, within its reach.
+const barrier = { shape: "rect", x: 0.3, y: 0.3, yaw: 0, width: 0.04, length: 0.6 };
+const armBase = { x: 0.7, y: 0.1 }, target = { x: 0.55, y: 0.35 };
+assert.equal(planPath({ x: 0.15, y: 0.3 }, target, arena, [barrier]), null);
+const drops = carryTargets(target, arena, [barrier], armBase, 0.3);
+assert.ok(drops.length >= 2 && drops.length <= 5, `${drops.length} drop points`);
+for (const drop of drops) {
+  assert.ok(drop.x > 0.3 + 0.02 + CLEARANCE_M + CARRY_SLACK_M - 0.011, `drop ${JSON.stringify(drop)} is on the goal's side, clear of the wall`);
+  assert.ok(Math.hypot(drop.x - armBase.x, drop.y - armBase.y) <= 0.3, "within the arm's reach");
+  assert.ok(planPath(drop, target, arena, [barrier]), "the goal can be walked to from the drop point");
+}
+assert.ok(Math.hypot(drops[0].x - armBase.x, drops[0].y - armBase.y) <= Math.hypot(drops.at(-1).x - armBase.x, drops.at(-1).y - armBase.y), "nearest to the arm first");
+assert.deepEqual(carryTargets({ x: 0.15, y: 0.3 }, arena, [barrier], armBase, 0.3), [], "nothing on the far side of the wall is within reach");
+console.log(`PASS  fully blocked: ${drops.length} places for the arm to set the robot down, none when the goal's side is out of reach`);

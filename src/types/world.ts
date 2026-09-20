@@ -155,6 +155,9 @@ export type WorldState = {
 
   robots: Robot[];
   obstacles: Obstacle[];
+  // The bridge's navigation state, for display. "carrying": goto found no walkable path and waits for the arm to
+  // lift the robot to one of `carry.drops`, from where the goal can be walked to.
+  mission?: { state: string; detail?: string; carry?: { id: number; drops: Point[] } };
   goal?: Point; // where the user clicked
   path?: Point[]; // planner output
   arm?: ArmState; // pick-and-place assist arm, if the rig has one
