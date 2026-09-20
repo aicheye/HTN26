@@ -1,11 +1,11 @@
 """Grip the Sesame at the centre of its tag. One target, one grip, every number printed.
 
-    sh run.sh grip [--dry-run] [--grip-z 8.5] [--jaw-angle 90] [--open 45] [--tag-offset AHEAD LEFT] [--hover 5] [--lift 7] [--carry 0 10]
+    sh run.sh grip [--dry-run] [--grip-z 8.5] [--jaw-angle 90] [--open 45] [--tag-offset 1 0] [--hover 5] [--lift 7] [--carry 0 10]
 
 How the target is found:
   1. From one camera, median of several frames holding both the Sesame's tag and the arm's tag (floor cm).
   2. Sesame minus arm tag, rotated by the arm tag's heading -> the tag centre ahead/left of the arm's base.
-     The base is where the arm's tag is (--tag-offset shifts that).
+     The base is where the arm's tag is. --tag-offset pulls the grip point back toward the base (default 1 cm).
   3. Target: x, y = tag centre; z = --grip-z (8.5 cm: the demonstrated 9.0 was a few mm high); pitch straight down;
      jaw heading = tag heading + --jaw-angle, kept exactly (the moving jaw always on the same side).
   4. Closed-form IK. If straight down cannot reach, the gripper tilts only as far as needed, in 5 deg steps.
@@ -53,7 +53,7 @@ def main():
     ap.add_argument("--grip-z", type=float, default=8.5, help="cm above the arm's base where the jaws close (demo 9.0 was a few mm high)")
     ap.add_argument("--jaw-angle", type=float, default=90.0, help="jaw axis relative to the tag's top edge: 90 = across the tag (the lips are at its left and right edges); 0 if the tag is stuck rotated 90 deg on the body")
     ap.add_argument("--open", type=float, default=OPEN_DEFAULT, help="gripper opening before the grip (0 closed .. 100 fully open)")
-    ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[0.0, 0.0], help="the arm's base relative to its tag (cm)")
+    ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[1.0, 0.0], help="cm to pull the grip point back toward the base / to the right of the tag centre (default: 1 cm back, the gripper landed 1 cm past the tag)")
     ap.add_argument("--hover", type=float, default=5.0); ap.add_argument("--lift", type=float, default=7.0, help="cm to lift the Sesame straight up from where it was gripped, before carrying it")
     ap.add_argument("--carry", type=float, nargs=2, metavar=("DX", "DY"), default=[0.0, 10.0], help="cm to carry the Sesame at the lifted height, ahead and left in the arm's frame, before setting it down")
     ap.add_argument("--dry-run", action="store_true")
@@ -81,7 +81,7 @@ def main():
     tag_rel = (r["heading"] - a["heading"] + 180) % 360 - 180        # the tag's orientation in the arm's frame
     jaw = (tag_rel + args.jaw_angle + 180) % 360 - 180
     print(f"2. tag centre relative to the arm's tag: {ahead:.1f} cm ahead, {left:+.1f} cm left; Sesame heading {r['heading'] - a['heading']:+.1f} deg relative to the arm")
-    print(f"3. target in the arm's frame: x={x:.1f} y={y:.1f} z={args.grip_z:.1f} cm, {np.hypot(x, y):.1f} cm from the base")
+    print(f"3. target in the arm's frame: x={x:.1f} y={y:.1f} z={args.grip_z:.1f} cm, {np.hypot(x, y):.1f} cm from the base (tag centre pulled {args.tag_offset[0]:g} cm back, {args.tag_offset[1]:g} cm right)")
     print(f"   wrist: tag orientation {tag_rel:+.1f} deg in the arm's frame, jaw axis = tag {args.jaw_angle:+.0f} = {jaw:+.1f} deg")
 
     q_grip, pitch = solve(x, y, args.grip_z, jaw)
