@@ -184,7 +184,8 @@ export function pickupTarget(robot, arena, obstacles, armBase, reach, robotRadiu
   return best;
 }
 
-// A* over an 8-connected grid. Returns waypoints from start to goal, or null when no walkable path exists.
+// Dijkstra's algorithm over an 8-connected grid. Returns waypoints from start to goal, or null when no walkable
+// path exists.
 // A goal inside an obstacle (for example "go to the chocolate") is replaced by the nearest free cell.
 export function planPath(start, goal, arena, obstacles, robotRadius = ROBOT_RADIUS_M) {
   const { cols, rows, centre, cellOf, blocked, cellCost, nearestFree, neighbours } = buildGrid(arena, obstacles, robotRadius);
@@ -201,15 +202,16 @@ export function planPath(start, goal, arena, obstacles, robotRadius = ROBOT_RADI
   }
   if (goalCell < 0) return null;
 
+  // Dijkstra's algorithm: always expand the open cell with the lowest cost from the start. With no estimate of the
+  // distance left, it finds the cheapest path under the soft costs for certain. The grid is 32 by 32 cells, so the
+  // cells it looks at that a guided search would skip cost well under a millisecond.
   const cost = new Float64Array(cols * rows).fill(Infinity), from = new Int32Array(cols * rows).fill(-1);
-  const heuristic = (i) => Math.hypot((i % cols) - (goalCell % cols), Math.floor(i / cols) - Math.floor(goalCell / cols));
   const open = new Set([startCell]);
   cost[startCell] = 0;
   while (open.size > 0) {
     let current = -1, best = Infinity;
     for (const i of open) {
-      const f = cost[i] + heuristic(i);
-      if (f < best) { best = f; current = i; }
+      if (cost[i] < best) { best = cost[i]; current = i; }
     }
     if (current === goalCell) break;
     open.delete(current);
