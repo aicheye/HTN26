@@ -5,9 +5,15 @@
 One command. Plug the arm in, join the robot's WiFi, and:
 
 ```
-sh run.sh go             # starts the trackers, calibrates, records a demo: each only if not done yet; then grips
-sh run.sh go --now       # the same, and grips the moment a camera sees the Sesame
+sh run.sh grip           # the demo: to the centre of the Sesame's tag, close, lift 10 cm, carry left, release, rest
+sh run.sh go             # the full pipeline: trackers, frame, correction loop; grips again after every miss
 ```
+
+`grip` (`grip_tag.py`) is the one used at the venue. It opens Sean's camera page, starts the trackers if none
+answers, reads the Sesame's tag and the arm's tag from one camera, prints the target and the joints (with a
+forward-kinematics check), then moves: rest, hover, down to 8.5 cm, close, lift to 10 cm off the ground, carry
+10 cm to the left, lower, let go, lift away, rest. Tuning flags: `--grip-z`, `--open`, `--jaw-angle`,
+`--carry AHEAD LEFT`, `--tag-offset`; `--dry-run` prints the plan without moving.
 
 It sets itself up on first use (installs uv and the Python environment if needed, about a minute). The steps
 it runs for you, also available one at a time:
