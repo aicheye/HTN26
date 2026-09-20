@@ -10,6 +10,10 @@ With no demo (or "auto") the grasp is built from the tag itself: come down verti
 --grip-above-tag cm above the tag's reported height, jaws at --jaw-angle to the heading (90 = across the
 body). Those are the numbers a recorded demo would supply; the defaults are the ones measured from one.
 
+--auto (what sh run.sh go uses): no keypress. Whenever a camera sees the Sesame within reach, the arm grips
+it, carries it aside, sets it down and returns; then it waits until the Sesame is seen somewhere else
+(more than RETRIGGER_CM from where it was set down) before going again. q still quits.
+
 Keys:  space / g  find the Sesame and run the whole pick-and-place
        p          plan only: print every phase and whether it is reachable, no motion
        z          go to the ready pose (calibrated midpoint, gripper open)
@@ -53,6 +57,8 @@ VERTICAL_CM_PER_S = 4.0
 RELEASE_S = 1.0
 DROP_CANDIDATES = [(0, 10), (0, -10), (0, 7), (0, -7), (-4, 8), (-4, -8), (-6, 0)]
 READY = {j: 0.0 for j in JOINTS}
+RETRIGGER_CM = 5.0      # auto mode: grip again once the Sesame is this far from where it was last set down
+RETRY_S = 6.0           # auto mode: after a refused plan, wait this long (or a moved Sesame) before trying again
 
 
 def auto_demo(obs, frame, args):
@@ -218,6 +224,7 @@ def main():
     ap.add_argument("--lift", type=float, default=LIFT_CM); ap.add_argument("--approach", type=float, default=4.0)
     ap.add_argument("--squeeze", type=float, default=8.0); ap.add_argument("--speed", type=float, default=1.0)
     ap.add_argument("--once", action="store_true", help="run once without the key loop")
+    ap.add_argument("--auto", action="store_true", help="grip whenever the Sesame is seen, no keypress; q quits")
     ap.add_argument("--dry-run", action="store_true", help="plan only, never connect to the arm")
     args = ap.parse_args()
 
@@ -235,13 +242,17 @@ def main():
     tracker = Tracker(args.tracker); poller = Poller(tracker, period=0.3)
     arm = None if args.dry_run else Arm(args.port)
 
-    def run(dry):
-        obs = tracker.wait_for_robot(30.0)
+    last = {"drop_floor": None, "refused_at": 0.0, "refused_floor": None}
+
+    def run(dry, obs=None):
+        obs = obs or tracker.wait_for_robot(30.0)
         if obs is None:
             print("\n  no camera reported the Sesame's tag in 30 s"); return False
         traj, info = plan(demo, frame0, obs, args)
         if traj is None:
-            print("\n  REFUSED:\n" + info); return False
+            print("\n  REFUSED:\n" + info)
+            last["refused_at"], last["refused_floor"] = time.time(), (obs["robot"]["x"], obs["robot"]["y"])
+            return False
         tn = info["tag_now"]
         print(f"\n  Sesame at base ({tn['x']:.1f}, {tn['y']:.1f}) cm heading {tn['heading']:.0f} [camera {obs['unit']}]; "
               f"pick x={100*info['pick']['x']:.1f} y={100*info['pick']['y']:.1f}, drop x={100*info['drop']['x']:.1f} y={100*info['drop']['y']:.1f}, "
@@ -253,7 +264,9 @@ def main():
         execute(arm, traj, args.speed)
         print("  back to the ready pose")
         arm.slew(READY, traj[-1][2])
-        print("  done")
+        frame_now = frame0.adjusted_for_arm_tag(obs["arm"])
+        last["drop_floor"] = tuple(frame_now.to_floor([[100 * info["drop"]["x"], 100 * info["drop"]["y"]]])[0])
+        print("  done; waiting for the Sesame to be seen somewhere new")
         return True
 
     if args.once or args.dry_run:
@@ -261,12 +274,25 @@ def main():
         if arm: arm.close(False)
         return 0 if ok else 1
 
-    print("space/g = pick up and move the Sesame   p = plan only   z = ready pose   o = open gripper   q = quit")
+    if args.auto:
+        print("AUTO: the arm grips the Sesame whenever a camera sees it in reach. q = quit, p = plan only, z = ready pose")
+    else:
+        print("space/g = pick up and move the Sesame   p = plan only   z = ready pose   o = open gripper   q = quit")
     keys = Keys()
     try:
         last_line = ""
         while True:
             key = keys.get()
+            if args.auto and key is None:
+                o = poller.get()
+                if o is not None and arm is not None:
+                    here = (o["robot"]["x"], o["robot"]["y"])
+                    moved_since_drop = last["drop_floor"] is None or np.hypot(here[0] - last["drop_floor"][0], here[1] - last["drop_floor"][1]) > RETRIGGER_CM
+                    refused_recently = time.time() - last["refused_at"] < RETRY_S and last["refused_floor"] is not None \
+                        and np.hypot(here[0] - last["refused_floor"][0], here[1] - last["refused_floor"][1]) < 3.0
+                    if moved_since_drop and not refused_recently:
+                        print(f"\n  Sesame seen at floor ({here[0]:.1f}, {here[1]:.1f}): gripping")
+                        run(False, tracker.observe_steady(1.0) or o)
             if key in (" ", "g"):
                 run(False)
             elif key == "p":

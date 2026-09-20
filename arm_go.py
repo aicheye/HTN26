@@ -1,7 +1,8 @@
 """One command for the arm: get everything running and grip the Sesame.
 
-    sh run.sh go            do whatever is still missing, then wait for a keypress to grip
-    sh run.sh go --now      the same, then grip immediately once the Sesame is seen, and exit
+    sh run.sh go            do whatever is still missing, then grip the Sesame whenever a camera sees it (auto)
+    sh run.sh go --manual   the same, but wait for a space press before each grip
+    sh run.sh go --now      grip once as soon as the Sesame is seen, then exit
 
 In order, skipping what is already done:
   1. trackers: if no camera reports the Sesame, start both Pi trackers in the background and wait for them
@@ -111,8 +112,10 @@ def main():
         print("from the tag geometry (no demo needed; record one with sh run.sh record NAME to use it instead)")
     rest = [a for a in args if a != name]
 
-    print(f"4. pickup ({name})" + (" now" if now else ": space = go, p = plan, q = quit"))
-    cmd = [PY, "sesame_pickup.py", name] + rest + (["--once"] if now else [])
+    manual = "--manual" in rest
+    rest = [a for a in rest if a != "--manual"]
+    print(f"4. pickup ({name})" + (" now, once" if now else ": manual, space = go" if manual else ": AUTO, grips whenever the Sesame is seen in reach; q quits"))
+    cmd = [PY, "sesame_pickup.py", name] + rest + (["--once"] if now else [] if manual else ["--auto"])
     return subprocess.run(cmd).returncode
 
 

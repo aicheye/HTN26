@@ -1,8 +1,8 @@
 #!/bin/sh
 # The one command for the arm demo. Sets itself up on first use.
 #
-#   sh run.sh go                 THE command: start the trackers if needed, calibrate if needed, record a demo
-#                                if needed, then grip the Sesame (space = go).  sh run.sh go --now  grips at once.
+#   sh run.sh go                 THE command: trackers, frame, then the arm grips the Sesame whenever a camera sees it
+#                                (--manual: wait for space before each grip; --now: grip once and exit)
 #   sh run.sh check              what is ready and what is missing, with the fix for each
 #   sh run.sh test               the whole pick-and-place chain offline (no arm, no Pi)
 #   sh run.sh trackers           start both Pi cameras' trackers (fetches Sean's Pi files if this checkout lacks them)
