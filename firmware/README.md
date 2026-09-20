@@ -19,6 +19,19 @@ If the port is not found, hold `0`, tap `RST`, release `0`, and upload again.
 Join the robot's WiFi: `Sesame-Controller`, password `12345678`. The robot is at `192.168.4.1`.
 This network has no internet access.
 
+### Joining another network
+
+The robot can join a second network, such as a phone hotspot, and keeps its own access point as well. The network
+must offer 2.4 GHz. From the repo root, on the robot's WiFi: `sh pi/robot-join-wifi.sh "<name>" "<password>"`.
+
+| Request | Effect |
+|---|---|
+| `POST /api/wifi/connect` with form fields `ssid`, `password`, and optionally `remember=1` | Joins the network. With `remember=1` the network is stored once it has connected, joined at every boot, and retried once a minute while it is out of range and nobody is on the access point. Without it the network is forgotten on restart. |
+| `GET /api/wifi/status` | `connected`, `ssid`, `ip`, `host`, and `remembered` (the stored network name, when there is one) |
+| `POST /api/wifi/forget` | Drops the stored network. The current connection stays up until the next restart. |
+
+The settings page of the captive portal never sends `remember`, so a password entered there is not stored.
+
 ## WebSocket API
 
 `ws://192.168.4.1:81`, JSON text messages.

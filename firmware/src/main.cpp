@@ -3,6 +3,7 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <ESPmDNS.h>
+#include <Preferences.h>
 #include <Wire.h>
 #include <ESP32Servo.h>
 #include <Adafruit_GFX.h>
@@ -92,6 +93,13 @@ String wifiSetupError = "";          // result of the last finished attempt ("" 
 unsigned long wifiSetupQueuedMs = 0;
 unsigned long wifiSetupStartMs = 0;
 bool wifiRestoreApOnly = false;      // drop the station iface again after an AP-only scan
+// A network is remembered only when the connect request asks for it (remember=1), so that a password never
+// persists silently. A remembered network is joined at boot and retried while it is out of range.
+bool wifiSetupRemember = false;
+String savedSsid = "";
+String savedPass = "";
+unsigned long savedRetryMs = 0;
+const uint32_t SAVED_WIFI_RETRY_MS = 60000;
 const uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000;
 const uint32_t WIFI_SETUP_START_DELAY_MS = 300;  // let the HTTP response flush before the AP channel may hop
 
@@ -231,6 +239,7 @@ bool connectToWifi(const String& ssid, const String& pass, uint32_t timeoutMs = 
 void handleWifiScan();
 void handleWifiConnect();
 void handleWifiStatus();
+void handleWifiForget();
 void handleNotFound();
 String jsonEscape(const String& s);
 bool startMdns();
@@ -546,6 +555,24 @@ void showWifiInfoNow() {
   showingWifiInfo = false;           // let updateWifiInfoScroll re-init scroll state
 }
 
+void loadSavedWifi() {
+  Preferences prefs;
+  if (!prefs.begin("wifi", true)) return;  // namespace does not exist yet: nothing remembered
+  savedSsid = prefs.getString("ssid", "");
+  savedPass = prefs.getString("pass", "");
+  prefs.end();
+}
+
+void storeSavedWifi(const String& ssid, const String& pass) {
+  Preferences prefs;
+  prefs.begin("wifi", false);
+  if (ssid.length() == 0) prefs.clear();
+  else { prefs.putString("ssid", ssid); prefs.putString("pass", pass); }
+  prefs.end();
+  savedSsid = ssid;
+  savedPass = pass;
+}
+
 // Blocking connect for the BOOT path only (the web server isn't running yet,
 // so waiting here is harmless). Keeps the SoftAP alive via WIFI_AP_STA.
 // Fast-fails on terminal states (wrong password / SSID not found) and stops
@@ -607,6 +634,16 @@ void updateWifiSetup() {
           Serial.println("Station link lost.");
         }
       }
+      // Retry the remembered network once a minute while it is not joined. An attempt makes the SoftAP follow the
+      // station's channel search, which interrupts AP clients, so it only runs while nobody is on the AP.
+      if (!live && savedSsid.length() > 0 && WiFi.softAPgetStationNum() == 0 && millis() - savedRetryMs >= SAVED_WIFI_RETRY_MS) {
+        savedRetryMs = millis();
+        wifiSetupSsid = savedSsid;
+        wifiSetupPass = savedPass;
+        wifiSetupRemember = false;
+        wifiSetupQueuedMs = millis();
+        wifiSetupState = WIFI_SETUP_QUEUED;
+      }
     }
     return;
   }
@@ -630,6 +667,7 @@ void updateWifiSetup() {
     networkConnected = true;
     networkIP = WiFi.localIP();
     Serial.println("Connected! IP: " + networkIP.toString());
+    if (wifiSetupRemember) storeSavedWifi(wifiSetupSsid, wifiSetupPass);  // only credentials that worked
     announceNetwork(wifiSetupSsid);
     showWifiInfoNow();
     finishWifiSetup("");
@@ -693,7 +731,8 @@ void handleWifiScan() {
   server.send(200, "application/json", json);
 }
 
-// POST /api/wifi/connect (form: ssid, password) -> {"success":true,"pending":true}.
+// POST /api/wifi/connect (form: ssid, password, remember) -> {"success":true,"pending":true}.
+// remember=1 stores the network once it has connected. It is then joined at every boot.
 // The attempt itself runs from loop() (updateWifiSetup) so this handler never
 // blocks; the UI polls /api/wifi/status for the outcome.
 void handleWifiConnect() {
@@ -713,11 +752,22 @@ void handleWifiConnect() {
 
   wifiSetupSsid = ssid;
   wifiSetupPass = server.arg("password");
+  wifiSetupRemember = server.arg("remember") == "1";
   wifiSetupError = "";
   wifiSetupQueuedMs = millis();
   wifiSetupState = WIFI_SETUP_QUEUED;
   wifiRestoreApOnly = false;  // an explicit connect supersedes scan cleanup
   server.send(200, "application/json", "{\"success\":true,\"pending\":true}");
+}
+
+// POST /api/wifi/forget -> drops the remembered network. The current connection stays up until the next restart.
+void handleWifiForget() {
+  if (server.method() != HTTP_POST) {
+    server.send(405, "application/json", "{\"success\":false,\"error\":\"Method not allowed\"}");
+    return;
+  }
+  storeSavedWifi("", "");
+  server.send(200, "application/json", "{\"success\":true}");
 }
 
 // GET /api/wifi/status -> station state for the Settings panel, including
@@ -728,6 +778,9 @@ void handleWifiStatus() {
   json += ",\"connecting\":" + String(wifiSetupState != WIFI_SETUP_IDLE ? "true" : "false");
   if (wifiSetupError.length() > 0) {
     json += ",\"lastError\":\"" + jsonEscape(wifiSetupError) + "\"";
+  }
+  if (savedSsid.length() > 0) {
+    json += ",\"remembered\":\"" + jsonEscape(savedSsid) + "\"";
   }
   if (connected) {
     json += ",\"ssid\":\"" + jsonEscape(WiFi.SSID()) + "\"";
@@ -771,15 +824,22 @@ void setup() {
   display.display();
 
   // --- WIFI CONFIGURATION ---
-  // Don't write credentials to NVS flash: runtime WiFi setup is session-only
-  // (see firmware/README.md), and passwords shouldn't persist silently.
+  // The WiFi driver itself never writes credentials to flash. Runtime WiFi setup is session-only unless the
+  // request asked to remember the network (see firmware/README.md), so passwords do not persist silently.
   WiFi.persistent(false);
+  loadSavedWifi();
 
   // Try to connect to network first if configured
   if (ENABLE_NETWORK_MODE && String(NETWORK_SSID).length() > 0) {
     if (!connectToWifi(NETWORK_SSID, NETWORK_PASS)) {
       Serial.println("Failed to connect to network. Running in AP-only mode.");
       WiFi.mode(WIFI_AP); // Fall back to AP-only
+    }
+  } else if (savedSsid.length() > 0) {
+    savedRetryMs = millis();
+    if (!connectToWifi(savedSsid, savedPass)) {
+      Serial.println("Remembered network not joined. Running in AP-only mode, retrying once a minute.");
+      WiFi.mode(WIFI_AP);
     }
   } else {
     WiFi.mode(WIFI_AP);
@@ -795,7 +855,7 @@ void setup() {
 
   // Build WiFi info text for scrolling + start mDNS responder
   if (networkConnected) {
-    announceNetwork(NETWORK_SSID);
+    announceNetwork(WiFi.SSID());
   } else {
     setApOnlyInfoText();
     startMdns();
@@ -824,6 +884,7 @@ void setup() {
   server.on("/api/wifi/scan", handleWifiScan);
   server.on("/api/wifi/connect", handleWifiConnect);
   server.on("/api/wifi/status", handleWifiStatus);
+  server.on("/api/wifi/forget", handleWifiForget);
   
   // Catch-all route for captive portal
   // This ensures any URL redirects to the controller page
