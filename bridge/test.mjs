@@ -123,6 +123,36 @@ try {
   assert.equal(await (await fetch(second.textureUrl)).text(), "picture two");
   console.log("PASS  obstacle picture: served by URL, and the URL changes only with the picture");
   client.close();
+
+  // A second bridge whose tracker never answers, as when the camera is off or sees no marker. The robot is
+  // connected, so it must still be listed (untracked), or the frontend has nothing to send its commands to.
+  const blind = spawn("node", ["bridge.mjs"], {
+    env: { ...process.env, BRIDGE_STATE_DIR: fs.mkdtempSync(os.tmpdir() + "/bridge-test-"), PORT: "18090", TRACKER_HOST: "127.0.0.1", TRACKER_PORT: "19099", ROBOT_URL: "ws://127.0.0.1:18081" },
+    stdio: "ignore",
+  });
+  try {
+    await wait(1500);
+    const unseen = (await (await fetch("http://127.0.0.1:18090/state")).json()).robots;
+    assert.equal(unseen.length, 1);
+    assert.equal(unseen[0].id, "sesame-1");
+    assert.equal(unseen[0].tracking, false);
+    assert.equal(unseen[0].mode, "lost");
+    const pad = new WebSocket("ws://127.0.0.1:18090/ws");
+    const acks = [];
+    pad.onmessage = (event) => { const envelope = JSON.parse(event.data); if (envelope.type === "ack") acks.push(envelope.data); };
+    await new Promise((resolve) => { pad.onopen = resolve; });
+    robotMessages.length = 0;
+    pad.send(JSON.stringify({ type: "command", data: { id: "b1", ts: 0, robotId: "sesame-1", type: "forward" } }));
+    await wait(400);
+    assert.deepEqual(acks, [{ commandId: "b1", ok: true }]);
+    assert.equal(robotMessages.at(-1).command, "forward");
+    pad.send(JSON.stringify({ type: "command", data: { id: "b2", ts: 0, robotId: "sesame-1", type: "stop" } }));
+    await wait(300);
+    pad.close();
+    console.log("PASS  robot connected but never seen by the camera: listed as untracked, and manual commands reach it");
+  } finally {
+    blind.kill();
+  }
 } finally {
   bridge.kill();
   fakeTracker.close();

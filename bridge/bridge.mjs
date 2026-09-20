@@ -143,9 +143,15 @@ function buildState() {
 
   const command = (drive.mode === "software" && gaitEngine.command) || (robotState?.command ?? "");
   const mode = !tracking ? "lost" : command === "left" || command === "right" ? "turning" : MOVES.includes(command) ? "moving" : "idle";
-  const robot = lastRobot && {
-    id: "sesame-1", tagId: ROBOT_TAG, x: lastRobot.x, y: lastRobot.y, yaw: lastRobot.yaw, footprint: ROBOT_FOOTPRINT,
-    tracking, lastSeen: lastRobot.lastSeen, mode, confidence: Math.max(0, Math.min(1, 1 - lastRobot.sigma / 0.05)),
+  // The frontend sends commands to a robot from this list, so without an entry its controls do nothing. A robot
+  // that is connected but has never been seen by the camera is therefore listed too, in the middle of the arena
+  // with tracking false, which the frontend draws greyed out. Manual driving then works without the camera. goto
+  // does not: the navigator refuses to steer a robot that is not tracked.
+  const connected = robotSocket?.readyState === WebSocket.OPEN;
+  const known = lastRobot ?? (connected ? { x: (tracker?.floor[0] ?? 0) / 200, y: (tracker?.floor[1] ?? 0) / 200, yaw: 0, lastSeen: 0, sigma: 1 } : null);
+  const robot = known && {
+    id: "sesame-1", tagId: ROBOT_TAG, x: known.x, y: known.y, yaw: known.yaw, footprint: ROBOT_FOOTPRINT,
+    tracking, lastSeen: known.lastSeen, mode, confidence: Math.max(0, Math.min(1, 1 - known.sigma / 0.05)),
     ...(robotState?.face ? { face: robotState.face } : {}),
     ...(command && !MOVES.includes(command) ? { pose: command } : {}),
   };
