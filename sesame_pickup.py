@@ -236,14 +236,21 @@ def plan(demo, frame0, obs, args):
     samples, grasp, release = grasp_segment(demo, args.approach, 0.0)
     samples = [s for s in samples if s["t"] <= grasp["t"] + HOLD_S]
     tag_demo_floor = tag_pose_at(grasp, demo)
-    if not tag_demo_floor:
-        return None, "the demo has no tracker pose at the grasp mark: record it with the tracker running"
-    frame_demo = frame0.adjusted_for_arm_tag(demo["samples"][grasp["index"]].get("arm_floor"))
-    tag_demo = frame_demo.pose_to_base(tag_demo_floor)
+    gp = demo["samples"][grasp["index"]]["pose"]
+    if tag_demo_floor:
+        frame_demo = frame0.adjusted_for_arm_tag(demo["samples"][grasp["index"]].get("arm_floor"))
+        tag_demo = frame_demo.pose_to_base(tag_demo_floor)
+    else:
+        # the demo is the METHOD only: its own grasp point stands in for the tag, with the jaw direction
+        # such that, placed at a real tag, the jaws sit at --jaw-angle to the tag's heading
+        tag_demo = {"x": 100 * gp["x"], "y": 100 * gp["y"], "z": 0.0, "heading": gp["jaw_yaw"] - args.jaw_angle}
     frame_now = frame0.adjusted_for_arm_tag(obs["arm"])
     tag_now = frame_now.pose_to_base(obs["robot"])
     offsets = relative_offsets(samples, tag_demo)
     poses = place(offsets, tag_now)
+    corr = getattr(args, "correction", None) or {"ahead": 0.0, "left": 0.0, "up": 0.0}
+    for pz in poses:                                        # the kept correction, as for the tag-geometry grasp
+        pz["x"] += corr["ahead"] / 100; pz["y"] += corr["left"] / 100; pz["z"] += corr.get("up", 0.0) / 100
     for lift in (PRE_APPROACH_CM, PRE_APPROACH_CM / 2, 1.0):
         pre = dict(poses[0]); pre["z"] += lift / 100; pre["t"] = poses[0]["t"] - 1.5
         if ik_exact(pre["x"], pre["y"], pre["z"], pre["jaw_yaw"], pre["pitch"]) is not None:
@@ -354,6 +361,8 @@ def main():
             demo = load(args.demo)
         except FileNotFoundError:
             print(f"no demo '{args.demo}': record one with record_demo.py, or run without a name to grip from the tag geometry"); return 1
+        has_tag = any(x.get("robot_floor") for x in demo["samples"])
+        print(f"grasp METHOD from demo '{args.demo}'" + (" (anchored to its tag pose)" if has_tag else " (its own grasp point stands in for the tag)") + f", placed at the Sesame's tag, jaws at {args.jaw_angle:.0f} deg to its heading")
     if not os.path.exists(args.frame):
         print(f"{args.frame} not found: run calibrate_arm_frame.py first (fingertips on the Sesame's tag, 3 placements)"); return 1
     frame0 = ArmFrame.load(args.frame)

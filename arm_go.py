@@ -131,9 +131,9 @@ def main():
 
     print("3. grasp: ", end="", flush=True)
     demos = tracked_demos()
-    name = next((a for a in args if not a.startswith("-") and (a in demos or os.path.exists(f"demos/{a}.json"))), None)
+    name = next((a for a in args if not a.startswith("-") and os.path.exists(f"demos/{a}.json")), None)
     if name:
-        print(f"recorded demo '{name}'")
+        print(f"recorded demo '{name}'" + ("" if name in demos else " (method only: placed at the tag's pose)"))
     else:
         name = "auto"
         print("from the tag geometry (no demo needed; record one with sh run.sh record NAME to use it instead)")
