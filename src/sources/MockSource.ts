@@ -18,11 +18,14 @@ import type {
   WorldState,
 } from "../types/world";
 import type { ConnectionStatus, StateSource } from "./StateSource";
+// The Mock tab walks its robot with the bridge's own navigator and planner, so what it shows is what the real
+// bridge would do: the same paths, limits, stuck recovery, walk to the arm's reach, and carry request.
+import { Navigator } from "../../bridge/navigator.mjs";
+import { EDGE_MARGIN_M } from "../../bridge/planner.mjs";
 
 const TICK_MS = 50; // ~20 Hz
 const LINEAR_SPEED = 0.45; // m/s at speed = 1
 const ANGULAR_SPEED = 1.6; // rad/s at speed = 1
-const GOTO_ARRIVE_RADIUS = 0.06; // meters
 const POSE_DURATION_MS = 2_500; // one-shot animations block movement while playing
 
 /** How long the robot has to be blocked by a too-tall obstacle before the arm helps. */
@@ -82,6 +85,12 @@ export class MockSource implements StateSource {
   private phaseStart: Point & { z: number } = { x: 0, y: 0, z: 0 };
   private paused = false;
 
+  // goto is the bridge's navigator. It sends walking commands, which land in navDrive and move the mock robot. It
+  // runs on the mock's own clock, which advances with the ticks, so that tests with a fake clock work.
+  private navDrive = "";
+  private navClockMs = 0;
+  private navigator = this.makeNavigator();
+
   private stateSubs = new Set<(s: WorldState) => void>();
   private ackSubs = new Set<(a: Ack) => void>();
   private statusSubs = new Set<(s: ConnectionStatus) => void>();
@@ -92,7 +101,16 @@ export class MockSource implements StateSource {
     this.truth = { x: r.x, y: r.y, yaw: r.yaw };
   }
 
+  private makeNavigator() {
+    const navigator = new Navigator((command) => { this.navDrive = command === "stop" ? "" : command; });
+    // An arm request from the navigator: the first drop point that the arm's kinematics can serve is used.
+    navigator.requestCarry = (_goal, drops) => drops.some((drop) => this.beginCarry(drop) === null);
+    return navigator;
+  }
+
   resetScenario(id: MockScenarioId) {
+    this.navigator = this.makeNavigator();
+    this.navDrive = "";
     this.state = makeMockScenario(id);
     const r = this.robot();
     this.truth = { x: r.x, y: r.y, yaw: r.yaw };
@@ -126,6 +144,8 @@ export class MockSource implements StateSource {
   }
 
   private blockTest(message: string) {
+    if (this.navigator.state === "carrying") this.navigator.carried(false, message);
+    this.navDrive = "";
     this.active = null;
     this.paused = true;
     if (this.state.simulation) Object.assign(this.state.simulation, { status: "blocked", message });
@@ -181,6 +201,7 @@ export class MockSource implements StateSource {
       this.emitAck({ commandId: c.id, ok: false, error: "Reset the mock scene before resuming a paused lift" });
       return;
     }
+    if (c.type !== "goto") { this.navigator.cancel(); this.navDrive = ""; }
     if (c.type === "stop") {
       this.active = null;
       this.paused = true;
@@ -202,6 +223,8 @@ export class MockSource implements StateSource {
       this.active = { command: c, expiresAt: null };
       this.state.goal = { ...c.target };
       this.state.path = [{ x: this.truth.x, y: this.truth.y }, { ...c.target }];
+      this.navDrive = "";
+      this.navigator.start({ ...c.target });
     } else {
       this.active = {
         command: c,
@@ -225,6 +248,7 @@ export class MockSource implements StateSource {
     const now = performance.now();
     const dt = Math.min((now - this.lastTick) / 1000, 0.2);
     this.lastTick = now;
+    this.navClockMs += dt * 1000;
 
     if (this.active?.expiresAt && Date.now() > this.active.expiresAt) {
       this.active = null;
@@ -265,6 +289,10 @@ export class MockSource implements StateSource {
     robot.mode = mode;
     robot.tracking = true;
 
+    // What the telemetry panel shows for the live bridge, from the same navigator.
+    this.state.mission = { ...this.navigator.status(), robotRadius: this.navigator.robotRadius, drive: "mock", robotConnected: true };
+    this.state.arena = { ...this.state.arena, edgeMargin: EDGE_MARGIN_M };
+
     this.state.seq += 1;
     this.state.timestamp = Date.now();
     this.state = { ...this.state, robots: [{ ...robot }] };
@@ -282,30 +310,7 @@ export class MockSource implements StateSource {
       return "turning";
     }
 
-    if (cmd.type === "goto" && cmd.target) {
-      const dx = cmd.target.x - this.truth.x;
-      const dy = cmd.target.y - this.truth.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist < GOTO_ARRIVE_RADIUS) {
-        this.active = null;
-        this.state.goal = undefined;
-        this.state.path = undefined;
-        if (this.state.simulation?.status === "running") Object.assign(this.state.simulation, { status: "complete", message: "Reached the test goal." });
-        return "idle";
-      }
-      const desired = Math.atan2(dy, dx);
-      const err = wrapAngle(desired - this.truth.yaw);
-      if (Math.abs(err) > 0.12) {
-        this.truth.yaw = wrapAngle(
-          this.truth.yaw + Math.sign(err) * Math.min(ANGULAR_SPEED * dt, Math.abs(err)),
-        );
-        this.state.path = [{ x: this.truth.x, y: this.truth.y }, { ...cmd.target }];
-        return "turning";
-      }
-      this.advance(Math.min(LINEAR_SPEED * speed * dt, dist));
-      this.state.path = [{ x: this.truth.x, y: this.truth.y }, { ...cmd.target }];
-      return "moving";
-    }
+    if (cmd.type === "goto" && cmd.target) return this.stepNavigator(speed, dt);
 
     if (cmd.type === "forward" || cmd.type === "backward") {
       const dir = cmd.type === "forward" ? 1 : -1;
@@ -313,6 +318,38 @@ export class MockSource implements StateSource {
       return "moving";
     }
 
+    return "idle";
+  }
+
+  /** One tick of the bridge's navigator, and of the walking command it has chosen. */
+  private stepNavigator(speed: number, dt: number): Robot["mode"] {
+    const robot = this.robot(), arm = this.state.arm;
+    const radius = Math.hypot(robot.footprint.width, robot.footprint.length) / 2;
+    this.navigator.robotRadius = radius;
+    // 4 cm inside the arm's furthest reach, because a grip at full stretch fails the joint limits.
+    this.navigator.arm = arm ? { base: arm.mount, reach: ARM_MAX_REACH - 0.04 } : null;
+    this.navigator.step({ x: robot.x, y: robot.y, yaw: robot.yaw, tracking: true }, this.state.arena, this.state.obstacles, this.navClockMs);
+
+    const status = this.navigator.status();
+    this.state.path = this.navigator.path.length ? [{ x: this.truth.x, y: this.truth.y }, ...this.navigator.path] : undefined;
+    if (this.state.simulation?.status === "running" && status.detail) this.state.simulation.message = status.detail;
+    if (status.state === "done" || status.state === "failed") {
+      this.active = null;
+      this.navDrive = "";
+      this.state.goal = undefined;
+      this.state.path = undefined;
+      if (status.state === "failed") this.blockTest(status.detail);
+      else if (this.state.simulation?.status === "running") Object.assign(this.state.simulation, { status: "complete", message: "Reached the test goal." });
+      return "idle";
+    }
+    if (this.navDrive === "left" || this.navDrive === "right") {
+      this.truth.yaw = wrapAngle(this.truth.yaw + (this.navDrive === "left" ? 1 : -1) * ANGULAR_SPEED * speed * dt);
+      return "turning";
+    }
+    if (this.navDrive === "forward" || this.navDrive === "backward") {
+      this.advance((this.navDrive === "forward" ? 1 : -1) * LINEAR_SPEED * speed * dt);
+      return "moving";
+    }
     return "idle";
   }
 
@@ -423,6 +460,18 @@ export class MockSource implements StateSource {
       return;
     }
 
+    const error = this.beginCarry(drop);
+    if (error) this.blockTest(error);
+  }
+
+  /** Starts the pick-and-carry sequence to a drop point. Returns null when it has started, or why it cannot. */
+  private beginCarry(drop: Point): string | null {
+    const arm = this.state.arm;
+    if (!arm) return "There is no arm.";
+    if (arm.mode !== "idle") return "The arm is busy.";
+    if (!isWithinArmReach(arm.mount, this.truth)) return "Sesame is outside the arm's reach.";
+    const robot = this.robot();
+    const margin = Math.hypot(robot.footprint.width, robot.footprint.length) / 2;
     const route = Array.from({ length: 13 }, (_, i) => ({ x: lerp(this.truth.x, drop!.x, i / 12), y: lerp(this.truth.y, drop!.y, i / 12) }));
     const crossed = this.state.obstacles.filter((o) => route.some((p) => distanceTo(o, p) < margin));
     const clearance = Math.max(0.06, ...crossed.map((o) => o.height ?? 0)) + 0.03;
@@ -444,10 +493,7 @@ export class MockSource implements StateSource {
         return Math.hypot(reached.x - target.x, reached.y - target.y, reached.z - target.z) < 0.002;
       });
     });
-    if (!handle) {
-      this.blockTest("Handle pickup or clearance path is outside the URDF joint limits. Move the obstacle closer.");
-      return;
-    }
+    if (!handle) return "Handle pickup or clearance path is outside the URDF joint limits. Move the obstacle closer.";
     this.handleOffset = handle.offset;
     this.armFrom = { x: this.truth.x + handle.offset.x, y: this.truth.y + handle.offset.y };
     this.armTo = { x: drop.x + handle.offset.x, y: drop.y + handle.offset.y };
@@ -462,6 +508,7 @@ export class MockSource implements StateSource {
     arm.mode = "reaching";
     arm.targetRobotId = robot.id;
     if (this.state.simulation) this.state.simulation.message = "Obstacle detected. Arm reaching for Sesame.";
+    return null;
   }
 
   /** Advances the arm's phase timer, joint pose, and (while carrying) the robot's position. */
@@ -522,7 +569,8 @@ export class MockSource implements StateSource {
         this.armTo = null;
         const command = this.active?.command;
         if (command?.type === "goto" && command.target) {
-          this.state.path = [{ x: this.truth.x, y: this.truth.y }, { ...command.target }];
+          this.navigator.carried(true);   // it plans the rest of the way from where the arm set the robot down
+          this.state.path = [{ x: this.truth.x, y: this.truth.y }, { ...command.target }];  // until that plan exists
           if (this.state.simulation) this.state.simulation.message = "Carry complete. Continuing toward the destination.";
         } else {
           // The rescue is done; clear its command so the robot stays at the landing point.

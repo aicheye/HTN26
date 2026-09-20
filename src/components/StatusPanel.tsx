@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorld } from "../state/StateProvider";
 import type { WorldState } from "../types/world";
+import { costmap as planCostmap } from "../../bridge/planner.mjs";
 
 function staleMs(lastSeen: number): number {
   return Math.max(0, Date.now() - lastSeen);
@@ -99,8 +100,9 @@ function Navigation({ state }: { state: WorldState }) {
         <Row label="Robot reach" value={cm(m.robotRadius)} />
         <Row label="Edge limit" value={cm(state.arena.edgeMargin)} />
         <Row label="Drive" value={m.drive ?? "—"} />
-        <Row label="Robot link" value={m.robotConnected ? "connected" : "down"} muted={!m.robotConnected} />
-        <Row label="Camera" value={`${m.trackerFps ?? 0} fps · ${m.floorMarkers ?? 0} floor tags`} muted={(m.floorMarkers ?? 0) < 3} />
+        {/* The mock has no robot link and no camera, so these two rows are for the live bridge only. */}
+        {m.trackerFps != null && <Row label="Robot link" value={m.robotConnected ? "connected" : "down"} muted={!m.robotConnected} />}
+        {m.trackerFps != null && <Row label="Camera" value={`${m.trackerFps} fps · ${m.floorMarkers ?? 0} floor tags`} muted={(m.floorMarkers ?? 0) < 3} />}
       </dl>
     </>
   );
@@ -133,18 +135,28 @@ function Objects({ state, robot }: { state: WorldState; robot: WorldState["robot
 
 type CostmapData = { cell: number; cols: number; rows: number; clearance: number; edgeMargin: number; cost: number[] };
 
-/** The planner's grid from the bridge's GET /costmap, fetched once a second: grey where the robot's centre may not
+/** The planner's grid, refreshed once a second: grey where the robot's centre may not
  *  be, free cells from pale (cost 1) to orange (cost 4, right at a limit), with the path, the robot and the goal. */
 function Costmap({ state }: { state: WorldState }) {
   const { wsUrl, sourceKind } = useWorld();
   const [map, setMap] = useState<CostmapData | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Live: the bridge's own grid, from GET /costmap. Mock: the same planner runs here in the browser, so the grid is
+  // computed from the mock's scene. Both once a second.
+  const stateRef = useRef(state);
+  stateRef.current = state;
   useEffect(() => {
-    if (sourceKind !== "ws") { setMap(null); return; }
     const url = wsUrl.replace(/^ws/, "http").replace(/\/ws\/?$/, "") + "/costmap";
     let stopped = false;
-    const load = () => fetch(url).then((r) => r.json()).then((data) => { if (!stopped && data.cost) setMap(data); }).catch(() => {});
+    const load = () => {
+      if (sourceKind !== "ws") {
+        const now = stateRef.current;
+        setMap(planCostmap(now.arena, now.obstacles, now.mission?.robotRadius));
+        return;
+      }
+      fetch(url).then((r) => r.json()).then((data) => { if (!stopped && data.cost) setMap(data); }).catch(() => {});
+    };
     load();
     const timer = setInterval(load, 1000);
     return () => { stopped = true; clearInterval(timer); };

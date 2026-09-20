@@ -21,7 +21,7 @@ registerHooks({
 
 const { Vector3 } = await import("three");
 const { ARM_HOME, ARM_URDF_LIMITS, armFrames, armGeometry, origin, projectedOutline, sesameGeometry, urdfArmTip, solveUrdfArmIK } = await import("./src/robot/geometry.ts");
-const { obstacleColor, obstacleHeight, obstacleOutline, distanceTo, OBSTACLE, ARM_REST_POSE, ARM_LIMITS } = await import("./src/components/mapShared.ts");
+const { obstacleColor, obstacleHeight, obstacleOutline, distanceTo, OBSTACLE, ARM_REST_POSE, ARM_LIMITS, ARM_MAX_REACH } = await import("./src/components/mapShared.ts");
 const near = (actual, expected, tolerance = 1e-7) => assert.ok(Math.abs(actual - expected) < tolerance, `${actual} != ${expected}`);
 const { MockSource } = await import("./src/sources/MockSource.ts");
 
@@ -1124,4 +1124,56 @@ test("Table corners resolve from the map view, inset by the robot's clearance", 
   assert.match(resolveVoiceTarget("corner-top-right", [], state, robot.id).error, /blocked/);
   assert.equal(resolveVoiceTarget("corner-top-left", [], state, robot.id).error, undefined);
   assert.match(resolveVoiceTarget("corner-middle", [], state, robot.id).error, /Unknown/);
+});
+
+test("Mock walks to the arm's reach before it is carried, with the bridge's navigator", (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const source = new MockSource();
+  source.resetScenario("pickup");
+  const mount = source.state.arm.mount, start = { ...source.truth };
+  assert.ok(Math.hypot(start.x - mount.x, start.y - mount.y) > ARM_MAX_REACH, "the scenario starts Sesame outside the arm's reach");
+  source.runScenarioTest();
+  let sawVia = false, walkedBeforeLift = 0, liftedFrom = null;
+  for (let i = 0; i < 2400 && source.state.simulation.status === "running"; i++) {
+    now += 50;
+    source.tick();
+    const mission = source.state.mission, arm = source.state.arm;
+    if (mission.via) {
+      sawVia = true;
+      assert.equal(arm.mode, "idle", "the arm waits until Sesame has walked to it");
+      assert.ok(Math.hypot(mission.via.x - mount.x, mission.via.y - mount.y) <= ARM_MAX_REACH - 0.04 - 0.03 + 1e-9, "the pick-up spot is inside the arm's reach");
+      assert.ok(mission.via.y < 0.32, "and on Sesame's side of the barrier");
+    }
+    if (arm.mode === "idle" && !liftedFrom) walkedBeforeLift = Math.hypot(source.truth.x - start.x, source.truth.y - start.y);
+    if (arm.mode === "grasping" && !liftedFrom) liftedFrom = { ...source.truth };
+  }
+  assert.equal(source.state.simulation.status, "complete", source.state.simulation.message);
+  assert.ok(sawVia, "the navigator set a pick-up spot");
+  assert.ok(walkedBeforeLift > 0.15, `Sesame walked ${walkedBeforeLift.toFixed(2)} m toward the arm before the lift`);
+  assert.ok(Math.hypot(liftedFrom.x - mount.x, liftedFrom.y - mount.y) <= ARM_MAX_REACH, "it was picked up inside the arm's reach");
+  const goal = source.state.simulation.testGoal;
+  assert.ok(Math.hypot(source.truth.x - goal.x, source.truth.y - goal.y) < 0.06, "and walked on to the goal from where it was set down");
+});
+
+test("Mock walks round a box with the bridge's planner, and the arm stays idle", (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const source = new MockSource();
+  source.resetScenario("detour");
+  source.runScenarioTest();
+  let furthestRight = 0, waypoints = 0;
+  for (let i = 0; i < 1600 && source.state.simulation.status === "running"; i++) {
+    now += 50;
+    source.tick();
+    assert.equal(source.state.arm.mode, "idle");
+    furthestRight = Math.max(furthestRight, source.truth.x);
+    waypoints = Math.max(waypoints, source.state.path?.length ?? 0);
+    const robot = source.state.robots[0], radius = Math.hypot(robot.footprint.width, robot.footprint.length) / 2;
+    for (const obstacle of source.state.obstacles) assert.ok(distanceTo(obstacle, source.truth) >= radius - 0.004, "the body never touches the box");
+  }
+  assert.equal(source.state.simulation.status, "complete", source.state.simulation.message);
+  assert.ok(furthestRight > 0.215 + 0.09 + 0.09, `went round the box's right end (reached x = ${furthestRight.toFixed(2)})`);
+  assert.ok(waypoints > 2, "the path has bends, it is not the straight line the mock used to draw");
+  assert.equal(source.state.arena.edgeMargin, 0.07);
 });
