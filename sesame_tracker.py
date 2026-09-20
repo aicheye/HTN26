@@ -31,7 +31,7 @@ def default_host():
 
 
 class Tracker:
-    HOLD_S = 3.0     # a sighting counts for this long: a small tag is missed in many frames while standing still
+    HOLD_S = 10.0    # a sighting counts for this long: a small tag is missed in most frames while standing still
 
     def __init__(self, host=None, units=(3, 4), timeout=1.5):
         self.host = host or default_host()
@@ -76,6 +76,21 @@ class Tracker:
             if best is None or key > best[0]:
                 best = (key, obs)
         return None if best is None else best[1]
+
+    def wait_for_robot(self, timeout=30.0, period=0.2, say=print):
+        """Poll until some camera reports the Sesame (or the last sighting is still fresh), then return the
+        steady median over the next second. None after timeout. The tag is missed in most frames at this
+        size, so this waits patiently instead of sampling briefly."""
+        end = time.time() + timeout
+        told = False
+        while time.time() < end:
+            if self.observe() is not None:
+                return self.observe_steady(1.0)
+            if not told and say:
+                say("   waiting for a camera to report the Sesame's tag (hold it still)...")
+                told = True
+            time.sleep(period)
+        return None
 
     def observe_steady(self, seconds=1.0, period=0.15):
         """Median of the observations over a short window (position and heading), for a pose to act on."""

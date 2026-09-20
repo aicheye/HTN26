@@ -33,8 +33,8 @@ def main():
     args = ap.parse_args()
 
     tracker = Tracker(args.tracker)
-    if tracker.observe_steady(1.5) is None:
-        print(f"no tracker sees the robot at {tracker.host} (units {tracker.units}). Opening the camera view: check the corner tags are learned and tag 0 is in view.")
+    if tracker.wait_for_robot(40.0) is None:
+        print(f"no tracker reported the robot at {tracker.host} (units {tracker.units}) in 40 s. Opening the camera view: check the corner tags are learned and tag 0 is in view.")
         open_camera_page(tracker.host)
         return 1
     arm = FakeArm() if args.fake else Arm(args.port)
@@ -45,9 +45,10 @@ def main():
         while True:
             key = keys.get()
             if key == " ":
-                obs = tracker.observe_steady(1.5)
+                print()
+                obs = tracker.wait_for_robot(20.0)
                 if obs is None:
-                    print("\n  the tracker does not see the robot right now; hold the Sesame still and press space again")
+                    print("  no camera reported the robot in 20 s; move the Sesame a little (tag flat, in view) and press space again")
                     open_camera_page(tracker.host)
                     continue
                 pose = fk(arm.read())

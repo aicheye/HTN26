@@ -196,9 +196,9 @@ def main():
     arm = None if args.dry_run else Arm(args.port)
 
     def run(dry):
-        obs = tracker.observe_steady(1.0)
+        obs = tracker.wait_for_robot(30.0)
         if obs is None:
-            print("\n  no camera sees the Sesame's tag"); return False
+            print("\n  no camera reported the Sesame's tag in 30 s"); return False
         traj, info = plan(demo, frame0, obs, args)
         if traj is None:
             print("\n  REFUSED:\n" + info); return False
