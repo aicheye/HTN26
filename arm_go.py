@@ -6,9 +6,11 @@
 
 In order, skipping what is already done:
   1. trackers: if no camera reports the Sesame, start both Pi trackers in the background and wait for them
-  2. arm frame + hinge offset: MEASURED by selfcal.py: the arm holds the Sesame by its hinge and moves it
-     under the camera (one hand action: place the hinge in the open jaws, press space). --refresh-frame
-     measures again; --tag-frame derives the frame from the arm base tag instead (no hands, less exact)
+  2. arm frame: from the arm base tag (id 5) every run, no hands (--offset AHEAD LEFT / --turn adjust the
+     assumed tag placement on the base). --selfcal instead measures frame and hinge offset with the arm
+     holding the Sesame (one hand action).
+  3. grasp: the end effector goes 3 cm from the tag centre along its heading, to the hinge nearer the arm
+     (--hinge), jaws across the body
   3. demo: if no demo has the tracker's tag pose at its grasp mark, run record_demo.py grip
   4. pickup: sesame_pickup.py with the newest tracked demo (space = go, p = plan, q = quit)
 Extra arguments after --now / the demo name go to sesame_pickup.py (for example --drop-offset 0 10).
@@ -96,28 +98,17 @@ def main():
         args = [a for k, a in enumerate(args) if k not in (i, i + 1, i + 2) and a not in ("--turn", turn)]
     else:
         ahead, left, turn = "-3.9", "0", "0"      # tag over the pan axis, 3.9 cm ahead of the base origin (URDF)
-    def measured():
-        try:
-            return json.load(open("arm_frame.json")).get("measured", False)
-        except Exception:
-            return False
-    if os.path.exists("arm_frame.json") and measured() and "--refresh-frame" not in args:
-        print("arm_frame.json present, measured by selfcal (delete it, or pass --refresh-frame, to measure again)")
-    elif "--tag-frame" not in args:
-        args = [a for a in args if a != "--refresh-frame"]
+    if "--selfcal" in args:
+        args = [a for a in args if a != "--selfcal"]
         print("measuring: the arm will hold the Sesame by its hinge and move it around under the camera")
         print("   when the jaws open, place the hinge between them (tag up) and press space")
         if subprocess.run([PY, "selfcal.py"]).returncode != 0:
-            print("   self-calibration failed; sh run.sh go --tag-frame derives the frame from the arm base tag instead")
             return 1
     else:
-        args = [a for a in args if a not in ("--refresh-frame", "--tag-frame")]
-        # tag 5 sits on the arm's base itself, its top edge pointing the way the arm faces (seen in the camera
-        # frames), so the base is where the tag is: no touching, no ruler. --offset AHEAD LEFT / --turn adjust it;
-        # sh run.sh calibrate (three fingertip touches) replaces it with a measured one.
-        print(f"from the arm base tag (id 5): base {ahead} cm ahead, {left} cm left of the tag, turned {turn} deg")
+        # from the arm base tag (id 5), fresh every run: no hands, follows a moved arm or camera
+        print(f"from the arm base tag (id 5): base {ahead} cm ahead, {left} cm left of the tag, turned {turn} deg  (--selfcal to measure instead)")
         if subprocess.run([PY, "frame_from_arm_tag.py", "--offset", ahead, left, "--turn", turn]).returncode != 0:
-            print("   could not read the arm base tag. Is tag 5 in view of a calibrated camera? For a hands-on frame: sh run.sh calibrate")
+            print("   could not read the arm base tag. Is tag 5 in view of a calibrated camera?")
             return 1
 
     print("3. grasp: ", end="", flush=True)
