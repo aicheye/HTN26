@@ -8,6 +8,7 @@ dist
 
 .venv/
 __pycache__/
+.pytest_cache/
 lerobot/
 .pio/
 .vscode/
@@ -31,3 +32,5 @@ vision/.venv/
 objects.jpg
 bridge/bridge.log
 ui.log
+reachability.csv
+reachability.png
