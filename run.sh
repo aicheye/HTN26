@@ -12,6 +12,7 @@
 #   sh run.sh frame --offset A L the same transform from the arm base tag (id 5) and a ruler: no hands-on step
 #   sh run.sh record NAME        guide the grasp by hand with the tracker running -> demos/NAME.json
 #   sh run.sh pickup NAME        p = plan, space = find the Sesame, grip, lift, carry, set down, release
+#   sh run.sh carry [BRIDGE]     carry the Sesame past an obstacle whenever Sean's bridge asks (default http://localhost:8080)
 #   sh run.sh replay NAME        play a demo back where it was recorded
 #   sh run.sh arm                ping the motors;  sh run.sh arm --halfway  moves to the midpoint and back
 #   sh run.sh setup              (re)build the Python environment
@@ -51,8 +52,9 @@ case "$cmd" in
   frame)     ensure_env; "$PY" frame_from_arm_tag.py "$@" ;;
   record)    ensure_env; "$PY" record_demo.py "$@" ;;
   pickup)    ensure_env; "$PY" sesame_pickup.py "$@" ;;
+  carry)     ensure_env; "$PY" arm_carry.py "$@" ;;
   grasp)     ensure_env; "$PY" grasp_robot.py "$@" ;;
   replay)    ensure_env; "$PY" replay_demo.py "$@" ;;
   arm)       ensure_env; "$PY" check_arm.py "$@" ;;
-  *)         sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)         sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac

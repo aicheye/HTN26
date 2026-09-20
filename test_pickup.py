@@ -111,6 +111,16 @@ def run_case(name, frame, robot_floor, arm_floor, zup, expect_fail=False):
         assert [n for n, _, _ in info["phases"]] == ["grip", "lift", "carry", "lower", "release", "retract"], info["phases"]
         assert all(done == total for _, done, total in info["phases"]), info["phases"]
         print(f"  PASS {name}: pickup plan, all 6 phases solve, carry pitch {info['carry_pitch']:.0f}, {info['seconds']:.1f} s")
+        # A drop point given on the floor (what Sean's bridge offers when a goto is fully blocked, see arm_carry.py)
+        # must land where the same point given in the arm's frame lands, also with a moved base tag or a mirrored floor.
+        drop_base = [100 * info["drop"]["x"], 100 * info["drop"]["y"]]
+        drop_floor = [float(v) for v in frame.adjusted_for_arm_tag(obs["arm"]).to_floor([drop_base])[0]]
+        args = argparse.Namespace(drop=None, drop_offset=None, drop_floor=drop_floor, lift=6.0, approach=4.0, squeeze=8.0)
+        traj, again = sesame_pickup.plan(demo, frame, obs, args)
+        assert traj is not None, f"{name}: plan with --drop-floor refused: {again}"
+        off = 100 * np.hypot(again["drop"]["x"] - info["drop"]["x"], again["drop"]["y"] - info["drop"]["y"])
+        assert off < 0.05, f"{name}: --drop-floor lands {off:.2f} cm from the same point given in the arm's frame"
+        print(f"  PASS {name}: --drop-floor ({drop_floor[0]:.1f}, {drop_floor[1]:.1f}) lands on the same point ({off:.3f} cm off)")
     finally:
         for s in servers:
             s.shutdown()

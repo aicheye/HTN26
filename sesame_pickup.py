@@ -172,6 +172,8 @@ def plan(demo, frame0, obs, args):
     tag_demo = frame_demo.pose_to_base(tag_demo_floor)
     frame_now = frame0.adjusted_for_arm_tag(obs["arm"])
     tag_now = frame_now.pose_to_base(obs["robot"])
+    if getattr(args, "drop_floor", None):                 # a drop point given on the floor, as the bridge does
+        args.drop = [float(v) for v in frame_now.to_base([args.drop_floor])[0]]
     offsets = relative_offsets(samples, tag_demo)
     poses = place(offsets, tag_now)
     for lift in (PRE_APPROACH_CM, PRE_APPROACH_CM / 2, 1.0):
@@ -254,6 +256,7 @@ def main():
     ap.add_argument("--tracker"); ap.add_argument("--frame", default="arm_frame.json"); ap.add_argument("--port", default=default_port(), help="arm serial port (default: the USB serial device found, or $SO101_PORT)")
     ap.add_argument("--drop-offset", type=float, nargs=2, metavar=("DX", "DY"), help="cm from the pick point, base frame")
     ap.add_argument("--drop", type=float, nargs=2, metavar=("X", "Y"), help="absolute base-frame cm")
+    ap.add_argument("--drop-floor", type=float, nargs=2, metavar=("X", "Y"), help="absolute drop point in the tracker's floor frame, cm (what the bridge's GET /carry offers)")
     ap.add_argument("--lift", type=float, default=LIFT_CM); ap.add_argument("--approach", type=float, default=4.0)
     ap.add_argument("--squeeze", type=float, default=8.0); ap.add_argument("--speed", type=float, default=1.0)
     ap.add_argument("--once", action="store_true", help="run once without the key loop")
