@@ -291,6 +291,39 @@ def open_camera_page(host=None, unit=3, units=None):
     return True
 
 
+def ensure_trackers(tracker, say=print):
+    """The camera units whose tracker answers; starts both trackers on the Pi (detached, copy + compile,
+    1-3 minutes) when none does. Fetches Sean's Pi files if the checkout lacks them, and refuses to start
+    an ssh that would ask for a password. Returns [] when nothing came up."""
+    import subprocess
+    up = alive_units(tracker)
+    if up:
+        return up
+    if not (os.path.isfile(os.path.join(HERE, "pi", "common.sh")) and os.path.isdir(os.path.join(HERE, "pi", "tracker"))):
+        say("fetching Sean's Pi files from origin/devel/sean (his code, do not commit it from here)")
+        subprocess.run(["git", "fetch", "-q", "origin", "devel/sean"], cwd=HERE, check=False)
+        subprocess.run(["git", "restore", "--source=origin/devel/sean", "--", "pi"], cwd=HERE, check=False)
+    if not os.path.exists(os.path.expanduser("~/.ssh/htn_pi")):
+        say("the Pi would ask for a password. Run once:  sh pi/setup-key.sh   (password qnxuser), then run this again.")
+        return []
+    say(f"no tracker answers at {tracker.host}: starting both on the Pi (copy + compile, 1-3 minutes; log: pi/trackers-live.log)")
+    with open(os.path.join(HERE, "pi", "trackers-live.log"), "ab") as log:
+        subprocess.Popen(["sh", "start_trackers.sh"], cwd=HERE, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+    for i in range(240):
+        time.sleep(1)
+        up = alive_units(tracker)
+        if up:
+            say(f"   trackers up after {i + 1} s"); return up
+        if i % 15 == 14:
+            try:
+                tail = open(os.path.join(HERE, "pi", "trackers-live.log")).read().strip().splitlines()[-1][:110]
+            except Exception:
+                tail = ""
+            say(f"   still starting ({i + 1} s)... {tail}")
+    say("no tracker answered in 4 minutes. Check pi/trackers-live.log and the WiFi.")
+    return []
+
+
 class Poller:
     """Keeps the latest observation fresh on a thread, so a 20 Hz loop never waits on the network."""
     def __init__(self, tracker, period=0.5):

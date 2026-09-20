@@ -19,7 +19,7 @@ import numpy as np
 
 from replay_demo import Arm, FPS
 from sesame_pickup import READY, REST, GRIPPER_REST, go_home
-from sesame_tracker import Tracker, alive_units, open_camera_page
+from sesame_tracker import Tracker, ensure_trackers, open_camera_page
 from so101_ik import JOINTS, ik, fk
 from so101_safe import default_port
 
@@ -54,9 +54,9 @@ def main():
     args = ap.parse_args()
 
     tracker = Tracker(args.tracker)
-    up = alive_units(tracker)
+    up = ensure_trackers(tracker)
     if not up:
-        print(f"no tracker answers at {tracker.host}: start them with  sh run.sh trackers  (or sh run.sh go once)"); return 1
+        return 1
     print(f"camera view (cameras up: {up}): both tags, the Sesame's and the arm's, must be in one camera's view")
     open_camera_page(tracker.host, units=up)                       # the same viewer as go: Sean's page, one tab per camera
     print(f"1. reading both tags from one camera at {tracker.host}...")
