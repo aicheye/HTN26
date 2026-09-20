@@ -1,15 +1,16 @@
 """Grip the Sesame at the centre of its tag. One target, one grip, every number printed.
 
-    sh run.sh grip [--dry-run] [--grip-z 9.0] [--jaw-angle 90] [--tag-offset AHEAD LEFT] [--hover 5] [--lift 5]
+    sh run.sh grip [--dry-run] [--grip-z 8.5] [--jaw-angle 90] [--open 45] [--tag-offset AHEAD LEFT] [--hover 5] [--lift 10] [--carry 0 10]
 
 How the target is found:
   1. From one camera, median of several frames holding both the Sesame's tag and the arm's tag (floor cm).
   2. Sesame minus arm tag, rotated by the arm tag's heading -> the tag centre ahead/left of the arm's base.
      The base is where the arm's tag is (--tag-offset shifts that).
-  3. Target: x, y = tag centre; z = --grip-z (9.0 cm, the demonstrated grip height); pitch straight down;
+  3. Target: x, y = tag centre; z = --grip-z (8.5 cm: the demonstrated 9.0 was a few mm high); pitch straight down;
      jaw heading = tag heading + --jaw-angle, kept exactly (the moving jaw always on the same side).
   4. Closed-form IK. If straight down cannot reach, the gripper tilts only as far as needed, in 5 deg steps.
-Then: rest -> hover above the target, jaws open -> straight down -> close over 1 s -> lift -> rest.
+Then: rest -> hover above the target, jaws open to --open -> straight down -> close over 1 s -> lift to --lift cm
+off the ground -> carry --carry (ahead, left) -> lower -> let go -> lift away -> rest.
 """
 import argparse
 import sys
