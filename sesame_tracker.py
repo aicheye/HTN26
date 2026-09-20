@@ -125,6 +125,41 @@ class Tracker:
                 best = (key, obs)
         return None if best is None else best[1]
 
+    def observe_pair(self, min_samples=5, timeout=30.0, period=0.15, say=print):
+        """The Sesame's tag and the arm base tag seen by the SAME camera in the SAME frames, medianed over
+        min_samples sightings: {"robot", "arm", "unit", "samples", "zUp", "floor"}. Measured together in one
+        camera, the camera's calibration error affects both tags alike and largely cancels in the relative
+        pose, and one camera's floor frame is never mixed with the other's. None after timeout."""
+        pairs = {u: [] for u in self.units}
+        end, last_word = time.time() + timeout, 0.0
+        while time.time() < end:
+            for u in self.units:
+                s = self.state(u)
+                if not (s and s.get("calibrated") and s.get("robot") and "x" in s["robot"] and s.get("arm") and "x" in s["arm"]):
+                    continue
+                if pairs[u] and s.get("t") == pairs[u][-1][2]:
+                    continue                                    # the same tracker frame again
+                pairs[u].append((dict(s["robot"]), arm_tag_pose(s), s.get("t"), s.get("zUp", True), s.get("floor")))
+            best = max(pairs, key=lambda u: len(pairs[u]))
+            if len(pairs[best]) >= min_samples:
+                break
+            if say and time.time() - last_word > 5:
+                say(f"   waiting for frames with both the Sesame's tag and the arm's tag from one camera... {[len(v) for v in pairs.values()]} so far")
+                last_word = time.time()
+            time.sleep(period)
+        best = max(pairs, key=lambda u: len(pairs[u]))
+        if not pairs[best]:
+            return None
+        rows = pairs[best]
+        def med(key, items):
+            h = np.radians([it[key]["heading"] for it in items])
+            return {"x": float(np.median([it[key]["x"] for it in items])), "y": float(np.median([it[key]["y"] for it in items])),
+                    "z": float(np.median([it[key].get("z", 0.0) for it in items])),
+                    "heading": float(np.degrees(np.arctan2(np.median(np.sin(h)), np.median(np.cos(h)))))}
+        items = [{"robot": r, "arm": a} for r, a, *_ in rows]
+        return {"robot": med("robot", items), "arm": med("arm", items), "unit": best, "samples": len(rows),
+                "zUp": rows[-1][3], "floor": rows[-1][4]}
+
     def wait_for_arm_tag(self, timeout=60.0, period=0.2, say=print):
         """Poll until a calibrated camera reports the arm base tag (id 5), then return the median of a second
         of sightings: {"x", "y", "z", "heading", "unit", "mirrored"}. None after timeout. Like the Sesame's

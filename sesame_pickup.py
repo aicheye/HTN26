@@ -49,6 +49,7 @@ import time
 import numpy as np
 
 from arm_frame import ArmFrame, rot
+from frame_from_arm_tag import frame_from_tag
 from grasp_robot import grasp_segment, tag_pose_at, relative_offsets, place, solve, PRE_APPROACH_CM
 from record_demo import Keys
 from replay_demo import Arm, load, FPS
@@ -321,6 +322,8 @@ def main():
     ap.add_argument("--once", action="store_true", help="run once without the key loop")
     ap.add_argument("--auto", action="store_true", help="grip whenever the Sesame is seen, no keypress; q quits")
     ap.add_argument("--no-check", action="store_true", help="do not judge the grip by whether the tag moved")
+    ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[-3.9, 0.0], help="the arm's base origin relative to its tag (cm)")
+    ap.add_argument("--tag-turn", type=float, default=0.0, help="the arm's forward relative to its tag's up (deg)")
     ap.add_argument("--dry-run", action="store_true", help="plan only, never connect to the arm")
     args = ap.parse_args()
 
@@ -347,10 +350,23 @@ def main():
     last = {"drop_floor": None, "refused_at": 0.0, "refused_floor": None}
 
     def run(dry, obs=None):
-        obs = obs or tracker.wait_for_robot(30.0)
-        if obs is None:
-            print("\n  no camera reported the Sesame's tag in 30 s"); return False
-        traj, info = plan(demo, frame0, obs, args)
+        # the Sesame relative to the arm's tag, both from one camera in the same frames, medianed
+        pair = tracker.observe_pair(min_samples=5, timeout=30.0)
+        if pair is not None:
+            obs = {"robot": pair["robot"], "arm": pair["arm"], "unit": pair["unit"], "zUp": pair["zUp"], "floor": pair["floor"], "samples": pair["samples"]}
+            frame_run = frame_from_tag(pair["arm"], args.tag_offset[0], args.tag_offset[1], args.tag_turn, not pair["zUp"])
+            d = np.array([pair["robot"]["x"] - pair["arm"]["x"], pair["robot"]["y"] - pair["arm"]["y"]])
+            along = d @ [np.cos(np.radians(pair["arm"]["heading"])), np.sin(np.radians(pair["arm"]["heading"]))]
+            left = d @ [-np.sin(np.radians(pair["arm"]["heading"])), np.cos(np.radians(pair["arm"]["heading"]))]
+            print(f"\n  camera {pair['unit']}, {pair['samples']} frames with both tags: Sesame is {along:.1f} cm ahead and {left:+.1f} cm left of the arm's tag "
+                  f"(arm tag heading {pair['arm']['heading']:.0f}, Sesame heading {pair['robot']['heading']:.0f})")
+        else:
+            obs = obs or tracker.wait_for_robot(30.0)
+            if obs is None:
+                print("\n  no camera reported the Sesame's tag in 30 s"); return False
+            frame_run = frame0
+            print("\n  no camera sees both tags at once: using the saved frame")
+        traj, info = plan(demo, frame_run, obs, args)
         if traj is None:
             print("\n  REFUSED:\n" + info)
             last["refused_at"], last["refused_floor"] = time.time(), (obs["robot"]["x"], obs["robot"]["y"])
