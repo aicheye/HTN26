@@ -1043,3 +1043,63 @@ test("Voice plans advance step by step, abort on failure and honour stop", (t) =
   assert.match(runner.check(), /did not reach home/);
   assert.match(runner.executePlan([{ type: "goto", name: "missing" }, { type: "forward", durationMs: 500 }]), /Not sent: step 1: .*Unknown/);
 });
+
+test("Measured turns and walks stop from camera feedback and refuse to leave the table", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { snapshot, commands, executor } = voiceHarness();
+  const robot = snapshot.state.robots[0];
+  const messages = [];
+  const runner = new VoiceExecutor(() => ({ ...snapshot }), (message) => messages.push(message));
+  const tick = (ms) => { t.mock.timers.tick(ms); snapshot.receivedAt = Date.now(); };
+  snapshot.receivedAt = Date.now();
+  Object.assign(robot, { x: 0.3, y: 0.4, yaw: 0 });
+
+  assert.match(runner.executePlan([{ type: "right", durationMs: 500, angleDeg: 90 }, { type: "forward", durationMs: 500, distanceCm: 25 }]), /turning right 90/);
+  assert.deepEqual(commands, [{ type: "right" }], "a measured turn is not a timed nudge");
+  robot.yaw = -0.5; tick(1000);
+  assert.equal(runner.check(), null);
+  assert.equal(commands.length, 1, "still turning");
+  robot.yaw = -1.45; tick(1000);
+  assert.equal(runner.check(), null);
+  assert.deepEqual(commands.slice(1).map((c) => c.type), ["stop", "forward"], "stops the turn, then starts the walk");
+  robot.y = 0.3; tick(1000);
+  assert.equal(runner.check(), null);
+  assert.equal(commands.length, 3);
+  robot.y = 0.4 - 0.245; tick(1000);
+  assert.equal(runner.check(), null);
+  assert.equal(commands.at(-1).type, "stop");
+  assert.match(messages.at(-1), /Finished all 2/);
+
+  Object.assign(robot, { x: 0.55, y: 0.3, yaw: 0 });
+  assert.match(runner.executePlan([{ type: "forward", durationMs: 500, distanceCm: 25 }]), /Not sent: .*off the table/);
+  robot.x = 0.3;
+  runner.executePlan([{ type: "forward", durationMs: 500, distanceCm: 20 }]);
+  tick(20 / 100 / 0.02 * 1000 + 3000);
+  assert.match(runner.check(), /did not finish walking forward 20 cm/);
+});
+
+test("Voice amounts are validated on the frontend too", async () => {
+  const { validateVoiceIntent } = await import("./src/state/voiceApi.ts");
+  assert.deepEqual(validateVoiceIntent({ type: "right", durationMs: 500, angleDeg: 90 }), { type: "right", durationMs: 500, angleDeg: 90 });
+  assert.deepEqual(validateVoiceIntent({ type: "forward", durationMs: 500, distanceCm: 25 }), { type: "forward", durationMs: 500, distanceCm: 25 });
+  for (const bad of [{ type: "forward", durationMs: 500, distanceCm: 200 }, { type: "left", durationMs: 500, angleDeg: 1 }, { type: "forward", durationMs: 500, angleDeg: 90 },
+    { type: "left", durationMs: 500, distanceCm: 10 }, { type: "forward", durationMs: 500, distanceCm: "10" }]) {
+    assert.equal(validateVoiceIntent(bad), null, JSON.stringify(bad));
+  }
+});
+
+test("Table corners resolve from the map view, inset by the robot's clearance", () => {
+  const state = voiceWorld();
+  state.obstacles = [];
+  const robot = state.robots[0];
+  Object.assign(robot, { x: state.arena.width / 2, y: state.arena.length / 2 });
+  const corner = (name) => { const r = resolveVoiceTarget(name, [], state, robot.id); assert.ok(r.target, `${name}: ${r.error}`); return r.target; };
+  const topRight = corner("corner-top-right"), bottomLeft = corner("corner top left".replace("top", "bottom"));
+  assert.ok(topRight.x > state.arena.width / 2 && topRight.y > state.arena.length / 2, "top right is far and right on the map");
+  assert.ok(bottomLeft.x < state.arena.width / 2 && bottomLeft.y < state.arena.length / 2, "bottom left is near and left");
+  assert.ok(topRight.x < state.arena.width && topRight.y < state.arena.length, "stays inside the walls");
+  state.obstacles = [{ id: "box", source: "manual", shape: "rect", x: topRight.x, y: topRight.y, yaw: 0, width: 0.06, length: 0.06 }];
+  assert.match(resolveVoiceTarget("corner-top-right", [], state, robot.id).error, /blocked/);
+  assert.equal(resolveVoiceTarget("corner-top-left", [], state, robot.id).error, undefined);
+  assert.match(resolveVoiceTarget("corner-middle", [], state, robot.id).error, /Unknown/);
+});

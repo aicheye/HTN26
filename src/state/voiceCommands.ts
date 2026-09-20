@@ -5,16 +5,31 @@ import type { ConnectionStatus } from "../sources/StateSource";
 export const VOICE_PULSE_MS = 500;
 export const VOICE_MAX_AGE_MS = 2000;
 export type VoiceIntent =
-  | { type: "forward" | "backward" | "left" | "right"; durationMs: number }
+  | { type: "forward" | "backward"; durationMs: number; distanceCm?: number }
+  | { type: "left" | "right"; durationMs: number; angleDeg?: number }
   | { type: "stop" }
   | { type: "pose"; pose: PoseName }
   | { type: "goto"; name: string; relation?: GotoRelation };
 export type GotoRelation = "at" | "past";
 export const MAX_PLAN_STEPS = 4;
+export const MAX_WALK_CM = 60;
+export const MIN_TURN_DEG = 5;
+export const MAX_TURN_DEG = 360;
+const EDGE_MARGIN_M = 0.07; // matches the bridge planner: the robot's centre cannot get closer to a wall than this
 export type Landmark = { name: string } & (
   | { kind: "point"; point: Point }
   | { kind: "obstacle"; obstacleId: string }
 );
+/**
+ * The four table corners, named as they appear on the map and in the default 3D view: x grows to the right and y grows
+ * away from the viewer, so "top" is the far side and "bottom" the near side.
+ */
+export const CORNERS = {
+  "corner top left": { right: false, top: true, label: "top left" },
+  "corner top right": { right: true, top: true, label: "top right" },
+  "corner bottom left": { right: false, top: false, label: "bottom left" },
+  "corner bottom right": { right: true, top: false, label: "bottom right" },
+} as const;
 export type TargetResult = { target: Point; error?: never } | { error: string; target?: never };
 
 const UNSUPPORTED = /\b(?:not|no|never|dont|don't|cannot|can't|then|and|or|after|before|until|unless|if)\b/;
@@ -75,8 +90,9 @@ export function resolveVoiceTarget(name: string, landmarks: readonly Landmark[],
     ...landmarks.filter((item) => normalizeVoiceName(item.name) === key),
     ...state.obstacles.filter((o) => normalizeVoiceName(o.id) === key).map((o) => ({ name: o.id, kind: "obstacle" as const, obstacleId: o.id })),
   ];
-  if (!matches.length) return { error: `Unknown destination: ${name}. That object is not currently detected.` };
-  if (matches.length !== 1) return { error: `Ambiguous destination: ${name}. Use a unique name.` };
+  const corner = matches.length ? undefined : (CORNERS as Record<string, (typeof CORNERS)[keyof typeof CORNERS]>)[key];
+  if (!matches.length && !corner) return { error: `Unknown destination: ${name}. That object is not currently detected.` };
+  if (matches.length > 1) return { error: `Ambiguous destination: ${name}. Use a unique name.` };
   const robot = state.robots.find((r) => r.id === robotId);
   if (!robot?.tracking) return { error: "The selected robot is not tracked." };
   const clearance = Math.hypot(robot.footprint.width, robot.footprint.length) / 2 + 0.03;
@@ -85,6 +101,11 @@ export function resolveVoiceTarget(name: string, landmarks: readonly Landmark[],
     && p.x >= clearance && p.y >= clearance && p.x <= state.arena.width - clearance && p.y <= state.arena.length - clearance
     && state.obstacles.every((o) => distanceTo(o, p) >= clearance)
     && state.robots.every((r) => r.id === robotId || !r.tracking || Math.hypot(p.x - r.x, p.y - r.y) >= clearance + Math.hypot(r.footprint.width, r.footprint.length) / 2);
+  if (corner) {
+    const inset = clearance + 0.001;
+    const point = { x: corner.right ? state.arena.width - inset : inset, y: corner.top ? state.arena.length - inset : inset };
+    return isClear(point) ? { target: point } : { error: `The ${corner.label} corner is blocked by an object or the other robot.` };
+  }
   const match = matches[0];
   if (match.kind === "point") return isClear(match.point) ? { target: { ...match.point } } : { error: "That waypoint is blocked or lacks clearance from the arena edge." };
   const obstacles = state.obstacles.filter((o) => o.id === match.obstacleId);
@@ -105,4 +126,28 @@ export function resolveVoiceTarget(name: string, landmarks: readonly Landmark[],
   if (!candidates.length) return { error: `No clear ${relation === "past" ? "point past" : "approach point beside"} that obstacle.` };
   if (relation === "past" && offFar(candidates[0].angle) > Math.PI / 2) return { error: "There is no clear space on the far side of that obstacle." };
   return { target: { x: candidates[0].x, y: candidates[0].y } };
+}
+
+/** Checks a measured walk before it starts, from the robot's pose at that moment. Turns are always safe in place. */
+export function checkVoiceWalk(intent: VoiceIntent, state: WorldState, robotId: string): string | null {
+  if ((intent.type !== "forward" && intent.type !== "backward") || !intent.distanceCm) return null;
+  const robot = state.robots.find((r) => r.id === robotId);
+  if (!robot) return "The selected robot is not tracked.";
+  const heading = robot.yaw + (intent.type === "backward" ? Math.PI : 0);
+  const end = { x: robot.x + Math.cos(heading) * intent.distanceCm / 100, y: robot.y + Math.sin(heading) * intent.distanceCm / 100 };
+  if (end.x < EDGE_MARGIN_M || end.y < EDGE_MARGIN_M || end.x > state.arena.width - EDGE_MARGIN_M || end.y > state.arena.length - EDGE_MARGIN_M) {
+    return `Walking ${intent.distanceCm} cm ${intent.type} would take the robot off the table. Try a shorter distance or turn first.`;
+  }
+  const clearance = Math.hypot(robot.footprint.width, robot.footprint.length) / 2 + 0.03;
+  for (const obstacle of state.obstacles) {
+    const closest = distanceTo(obstacle, robot);
+    if (!Number.isFinite(closest)) return "Cannot verify the path with incomplete scene geometry.";
+    // Only refuse when the walk gets closer than the clearance, so a robot already beside an object can still back away.
+    const steps = Math.ceil(intent.distanceCm / 2);
+    for (let i = 1; i <= steps; i++) {
+      const p = { x: robot.x + (end.x - robot.x) * i / steps, y: robot.y + (end.y - robot.y) * i / steps };
+      if (distanceTo(obstacle, p) < Math.min(clearance, closest) - 0.005) return `That walk would run into ${obstacle.id}.`;
+    }
+  }
+  return null;
 }

@@ -1,6 +1,6 @@
 import type { Command, CommandType, Point, WorldState } from "../types/world";
 import type { ConnectionStatus } from "../sources/StateSource";
-import { parseVoiceCommand, resolveVoiceTarget, voiceReadiness, type Landmark, type VoiceIntent } from "./voiceCommands";
+import { checkVoiceWalk, parseVoiceCommand, resolveVoiceTarget, voiceReadiness, type Landmark, type VoiceIntent } from "./voiceCommands";
 
 export type SpeechUpdate = { listening: boolean; error?: string };
 type SpeechResult = { results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>; resultIndex?: number };
@@ -126,7 +126,18 @@ const POSE_SETTLE_MS = 1000;
 const POSE_MAX_MS = 8000;
 const HELD_POSES = new Set(["rest", "stand"]);
 
-type ActiveStep = { intent: VoiceIntent; startedAt: number; target?: Point };
+// The robot keeps moving briefly after "stop", so measured moves stop this early (the bridge's default motion model).
+const WALK_LEAD_M = 0.01;
+const TURN_LEAD_RAD = 0.15;
+const WALK_SPEED_MPS = 0.02;   // slowest speed assumed when setting the time limit
+const TURN_RATE_RPS = 0.25;
+const MEASURE_GRACE_MS = 3000;
+
+const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+
+/** A walk or turn measured with the camera instead of a timer. */
+type Measure = { kind: "distance" | "angle"; goal: number; from: Point; yaw: number; turned: number; sign: number; label: string };
+type ActiveStep = { intent: VoiceIntent; startedAt: number; target?: Point; measure?: Measure };
 
 /** Runs a short validated plan one step at a time, advancing only when the current step has finished. */
 export class VoiceExecutor {
@@ -156,7 +167,18 @@ export class VoiceExecutor {
     const robot = state.robots.find((r) => r.id === current.robotId)!;
     const elapsed = Date.now() - step.startedAt;
     let done: boolean;
-    if (step.intent.type === "goto") {
+    if (step.measure) {
+      const m = step.measure;
+      if (!this.action.active) { this.cancel(); return `the robot did not finish ${m.label} in time.`; }
+      if (m.kind === "angle") {
+        // Signed and incremental, so camera jitter averages out instead of piling up as fake rotation.
+        m.turned += m.sign * wrapAngle(robot.yaw - m.yaw);
+        m.yaw = robot.yaw;
+        done = m.turned >= m.goal - TURN_LEAD_RAD;
+      } else {
+        done = Math.hypot(robot.x - m.from.x, robot.y - m.from.y) >= m.goal - WALK_LEAD_M;
+      }
+    } else if (step.intent.type === "goto") {
       if (!this.action.active) { this.cancel(); return `the robot did not reach ${step.intent.name} within ${GOTO_LIMIT_MS / 1000} seconds.`; }
       done = elapsed > 300 && (!state.arm || state.arm.mode === "idle") && !!step.target
         && Math.hypot(robot.x - step.target.x, robot.y - step.target.y) < GOTO_ARRIVE_M;
@@ -209,7 +231,20 @@ export class VoiceExecutor {
     let extra: Partial<Command>;
     let durationMs: number | undefined;
     let target: Point | undefined;
-    if (intent.type === "goto") {
+    let measure: Measure | undefined;
+    const robot = current.state!.robots.find((r) => r.id === current.robotId)!;
+    if ((intent.type === "left" || intent.type === "right") && intent.angleDeg) {
+      const goal = intent.angleDeg * Math.PI / 180;
+      measure = { kind: "angle", goal, from: { x: robot.x, y: robot.y }, yaw: robot.yaw, turned: 0, sign: intent.type === "left" ? 1 : -1, label: `turning ${intent.type} ${intent.angleDeg}°` };
+      extra = {};
+      durationMs = goal / TURN_RATE_RPS * 1000 + MEASURE_GRACE_MS;
+    } else if ((intent.type === "forward" || intent.type === "backward") && intent.distanceCm) {
+      const blocked = checkVoiceWalk(intent, current.state!, current.robotId!);
+      if (blocked) return `Not sent: ${blocked}`;
+      measure = { kind: "distance", goal: intent.distanceCm / 100, from: { x: robot.x, y: robot.y }, yaw: robot.yaw, turned: 0, sign: 1, label: `walking ${intent.type} ${intent.distanceCm} cm` };
+      extra = {};
+      durationMs = intent.distanceCm / 100 / WALK_SPEED_MPS * 1000 + MEASURE_GRACE_MS;
+    } else if (intent.type === "goto") {
       const result = resolveVoiceTarget(intent.name, current.landmarks ?? [], current.state!, current.robotId!, intent.relation);
       if (result.error) return `Not sent: ${result.error}`;
       target = result.target;
@@ -228,7 +263,8 @@ export class VoiceExecutor {
       this.action.supersede();
       return "Not sent: the connection became unavailable. Reconnect and try again.";
     }
-    this.step = { intent, startedAt: Date.now(), target };
+    this.step = { intent, startedAt: Date.now(), target, measure };
+    if (measure) return `Sent: ${measure.label}.`;
     return intent.type === "goto" ? `Sent: go ${intent.relation === "past" ? "past" : "to"} ${intent.name} (${GOTO_LIMIT_MS / 1000} second limit).`
       : intent.type === "pose" ? `Sent: ${intent.pose}.` : `Sent: ${intent.type} for ${durationMs} ms.`;
   }
@@ -236,7 +272,7 @@ export class VoiceExecutor {
   private finishStep(): string | null {
     const finished = this.step!;
     this.step = null;
-    if (finished.intent.type === "goto") this.action.cancel(); else this.action.supersede();
+    if (finished.intent.type === "goto" || finished.measure) this.action.cancel(); else this.action.supersede();
     const next = this.queue.shift();
     if (!next) {
       if (this.total > 1) this.notify(`Finished all ${this.total} steps.`, false);
