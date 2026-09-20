@@ -64,16 +64,23 @@ def main():
         if not os.path.exists(os.path.expanduser("~/.ssh/htn_pi")):
             print("the Pi would ask for a password. Run once:  sh pi/setup-key.sh   (password qnxuser), then run this again.")
             return 1
-        print(f"no tracker answers at {tracker.host}: starting both on the Pi (log: pi/trackers-live.log)")
+        print(f"no tracker answers at {tracker.host}: starting both on the Pi (copy + compile, 1-3 minutes; log: pi/trackers-live.log)")
         with open("pi/trackers-live.log", "ab") as log:
-            subprocess.Popen(["sh", "start_trackers.sh"], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
-        for i in range(60):
+            # detached: the trackers keep running on the Pi after this program ends or crashes
+            subprocess.Popen(["sh", "start_trackers.sh"], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+        for i in range(240):
             time.sleep(1)
             up = alive_units(tracker)
             if up:
-                break
+                print(f"   trackers up after {i + 1} s"); break
+            if i % 15 == 14:
+                try:
+                    tail = open("pi/trackers-live.log").read().strip().splitlines()[-1][:110]
+                except Exception:
+                    tail = ""
+                print(f"   still starting ({i + 1} s)... {tail}")
         if not up:
-            print("no tracker answered in 60 s. Check pi/trackers-live.log and the WiFi."); return 1
+            print("no tracker answered in 4 minutes. Check pi/trackers-live.log and the WiFi."); return 1
     # the camera page first, always: orient the camera so all four corner tags and the Sesame's tag are in view
     print(f"camera view for camera {up[0]} (cameras up: {up}). Orient the camera: 4 corner tags in view, then the Sesame.")
     open_camera_page(tracker.host, up[0])
