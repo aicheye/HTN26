@@ -1,6 +1,6 @@
 """Grip the Sesame at the centre of its tag. One target, one grip, every number printed.
 
-    sh run.sh grip [--dry-run] [--grip-z 8.5] [--jaw-angle 90] [--open 45] [--tag-offset 1 0] [--hover 5] [--lift 7] [--carry 0 10]
+    sh run.sh grip [--dry-run] [--grip-z 8.5] [--jaw-angle 90] [--open 45] [--tag-offset 1 0] [--hover 5] [--lift 10] [--carry 0 10]
 
 How the target is found:
   1. From one camera, median of several frames holding both the Sesame's tag and the arm's tag (floor cm).
@@ -54,7 +54,7 @@ def main():
     ap.add_argument("--jaw-angle", type=float, default=90.0, help="jaw axis relative to the tag's top edge: 90 = across the tag (the lips are at its left and right edges); 0 if the tag is stuck rotated 90 deg on the body")
     ap.add_argument("--open", type=float, default=OPEN_DEFAULT, help="gripper opening before the grip (0 closed .. 100 fully open)")
     ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[1.0, 0.0], help="cm to pull the grip point back toward the base / to the right of the tag centre (default: 1 cm back, the gripper landed 1 cm past the tag)")
-    ap.add_argument("--hover", type=float, default=5.0); ap.add_argument("--lift", type=float, default=7.0, help="cm to lift the Sesame straight up from where it was gripped, before carrying it")
+    ap.add_argument("--hover", type=float, default=5.0); ap.add_argument("--lift", type=float, default=10.0, help="cm to lift the Sesame straight up from where it was gripped, before carrying it")
     ap.add_argument("--carry", type=float, nargs=2, metavar=("DX", "DY"), default=[0.0, 10.0], help="cm to carry the Sesame at the lifted height, ahead and left in the arm's frame, before setting it down")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()

@@ -14,7 +14,7 @@
 #   sh run.sh record NAME        guide the grasp by hand with the tracker running -> demos/NAME.json
 #   sh run.sh anchor NAME        give a demo recorded without the tracker its tag pose (Sesame unmoved since)
 #   sh run.sh pickup NAME        p = plan, space = find the Sesame, grip, lift, carry, set down, release
-#   sh run.sh grip               the demo: to the centre of the Sesame's tag, close, lift 7 cm, carry left, lower, release, rest; every number printed
+#   sh run.sh grip               the demo: to the centre of the Sesame's tag, close, lift 10 cm, carry left, lower, release, rest; every number printed
 #   sh run.sh replay NAME        play a demo back where it was recorded
 #   sh run.sh arm                ping the motors;  sh run.sh arm --halfway  moves to the midpoint and back
 #   sh run.sh setup              (re)build the Python environment
