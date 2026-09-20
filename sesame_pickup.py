@@ -322,7 +322,7 @@ def main():
     ap.add_argument("--once", action="store_true", help="run once without the key loop")
     ap.add_argument("--auto", action="store_true", help="grip whenever the Sesame is seen, no keypress; q quits")
     ap.add_argument("--no-check", action="store_true", help="do not judge the grip by whether the tag moved")
-    ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[-3.9, 0.0], help="the arm's base origin relative to its tag (cm)")
+    ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[0.0, 0.0], help="the arm's base origin relative to its tag (cm); 0 0 = the base is where the tag is")
     ap.add_argument("--tag-turn", type=float, default=0.0, help="the arm's forward relative to its tag's up (deg)")
     ap.add_argument("--dry-run", action="store_true", help="plan only, never connect to the arm")
     args = ap.parse_args()

@@ -106,7 +106,7 @@ def main():
         turn = args[args.index("--turn") + 1] if "--turn" in args else "0"
         args = [a for k, a in enumerate(args) if k not in (i, i + 1, i + 2) and a not in ("--turn", turn)]
     else:
-        ahead, left, turn = "-3.9", "0", "0"      # tag over the pan axis, 3.9 cm ahead of the base origin (URDF)
+        ahead, left, turn = "0", "0", "0"         # the base is taken to be where its tag is
     if "--selfcal" in args:
         args = [a for a in args if a != "--selfcal"]
         print("measuring: the arm will hold the Sesame by its hinge and move it around under the camera")
