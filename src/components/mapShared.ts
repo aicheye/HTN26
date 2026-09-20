@@ -1,9 +1,15 @@
 import type { ArmJointAngles, ArmState, Obstacle, Point, Robot } from "../types/world";
 import { ARM_HOME, ARM_URDF_LIMITS } from "../robot/geometry";
 
+/** True when the obstacle is drawn by its traced contour: polygons, and photographed objects, whose photo is
+ *  transparent outside that contour. */
+export function hasContour(o: Obstacle): boolean {
+  return (o.shape === "polygon" || !!o.textureUrl) && (o.points?.length ?? 0) >= 3;
+}
+
 export function obstacleOutline(o: Obstacle): Point[] {
   let points: Point[];
-  if (o.shape === "polygon" && o.points?.length) points = o.points;
+  if (hasContour(o)) points = o.points!;
   else if (o.shape === "circle") points = Array.from({ length: 48 }, (_, i) => ({
     x: o.x + Math.cos(i * Math.PI / 24) * (o.radius ?? 0.1),
     y: o.y + Math.sin(i * Math.PI / 24) * (o.radius ?? 0.1),
@@ -20,7 +26,11 @@ export function obstacleColor(o: Obstacle): string {
 }
 
 export function obstacleHeight(o: Obstacle): number {
-  return Number.isFinite(o.height) && o.height! >= 0 ? Math.max(o.height!, 0.001) : 0.004;
+  if (Number.isFinite(o.height) && o.height! >= 0) return Math.max(o.height!, 0.001);
+  // The camera does not measure height. A photographed object is drawn 0.4 times as tall as its short side,
+  // between 1 and 4 cm, so that it stands out from the floor. The dashed outline still marks the height as a guess.
+  if (o.textureUrl) return Math.min(0.04, Math.max(0.01, 0.4 * Math.min(o.width ?? 0.05, o.length ?? 0.05)));
+  return 0.004;
 }
 
 export const FLOOR = "#e2e8f0";

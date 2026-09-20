@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { MapProps } from "./MapProps";
 import { armGeometry, displayRobot, origin, projectedOutline, sesameTopView, type Solid } from "../robot/geometry";
-import { cornerTags, markerImage, tableBorder, woodCanvas } from "./sceneSurface";
+import { cornerTags, markerImage, obstacleImage, tableBorder, woodCanvas } from "./sceneSurface";
 import {
   DANGER_M,
   FLOOR_EDGE,
@@ -53,6 +53,7 @@ export function Map2D({
 
     (state.arena.cornerTagIds ?? []).forEach((id) => markerImage(id, draw));
     state.robots.forEach((r) => markerImage(r.tagId, draw));
+    state.obstacles.forEach((o) => o.textureUrl && obstacleImage(o.id, o.textureUrl, draw));
     draw();
     const ro = new ResizeObserver(draw);
     ro.observe(wrap);
@@ -268,6 +269,18 @@ function drawObstacle(
   ctx.shadowOffsetY = 2;
   ctx.fill();
   ctx.shadowColor = "transparent";
+  const photo = o.textureUrl && obstacleImage(o.id, o.textureUrl);
+  if (photo) {
+    // The photo covers the oriented box. Canvas y points down, so a counter-clockwise yaw is a negative rotation.
+    const [cx, cy] = toPx(o, v);
+    const wpx = (o.width ?? 0.2) * v.scale, lpx = (o.length ?? 0.2) * v.scale;
+    ctx.save();
+    ctx.clip();
+    ctx.translate(cx, cy);
+    ctx.rotate(-o.yaw);
+    ctx.drawImage(photo, -wpx / 2, -lpx / 2, wpx, lpx);
+    ctx.restore();
+  }
   ctx.strokeStyle = danger ? OBSTACLE_DANGER : "#334155";
   ctx.lineWidth = danger ? 2.5 : 1;
   if (o.height === undefined) ctx.setLineDash([4, 3]);

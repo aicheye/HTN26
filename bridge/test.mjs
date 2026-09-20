@@ -110,6 +110,18 @@ try {
   assert.equal(states.at(-1).mission.state, "failed");
   assert.match(states.at(-1).mission.detail, /no walkable path/);
   console.log("PASS  goto behind a full wall: reports no walkable path");
+
+  // An obstacle's picture is served from a URL that changes when the picture changes, so the UI knows to reload it.
+  const textured = async (bytes) => {
+    const body = JSON.stringify([{ id: "green-box-1", source: "cv", shape: "rect", x: 0.5, y: 0.5, width: 0.1, length: 0.1, texture: Buffer.from(bytes).toString("base64") }]);
+    return (await (await fetch("http://127.0.0.1:18080/obstacles", { method: "POST", body })).json())[0];
+  };
+  const first = await textured("picture one"), again = await textured("picture one"), second = await textured("picture two");
+  assert.equal(first.texture, undefined);
+  assert.equal(first.textureUrl, again.textureUrl);
+  assert.notEqual(first.textureUrl, second.textureUrl);
+  assert.equal(await (await fetch(second.textureUrl)).text(), "picture two");
+  console.log("PASS  obstacle picture: served by URL, and the URL changes only with the picture");
   client.close();
 } finally {
   bridge.kill();

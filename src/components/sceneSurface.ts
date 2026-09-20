@@ -21,6 +21,25 @@ export function markerImage(id: number, redraw?: () => void) {
   return image.complete && image.naturalWidth ? image : undefined;
 }
 
+const obstacleImages = new Map<string, HTMLImageElement>();  // by URL
+const shownImages = new Map<string, HTMLImageElement>();     // by obstacle id: the last photo that finished loading
+
+/** The photo of a camera-detected obstacle. While a new photo of the same obstacle loads, the previous one is
+ *  returned, so a rescan does not make the object blink. */
+export function obstacleImage(id: string, url: string, redraw?: () => void) {
+  let image = obstacleImages.get(url);
+  if (!image) {
+    if (obstacleImages.size > 64) obstacleImages.clear();
+    image = new Image();
+    image.crossOrigin = "anonymous";
+    image.src = url;
+    obstacleImages.set(url, image);
+  }
+  if (image.complete && image.naturalWidth) shownImages.set(id, image);
+  else if (redraw) image.addEventListener("load", redraw, { once: true });
+  return shownImages.get(id);
+}
+
 export function tableBorder(arena: WorldState["arena"]) {
   return arena.border ?? (arena.tagSize ?? 0.08) * 0.75;
 }

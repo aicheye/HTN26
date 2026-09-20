@@ -13,6 +13,7 @@ import {
   ROBOT_FITTING_INSET,
   GOAL,
   GRID,
+  hasContour,
   obstacleColor,
   obstacleHeight,
   OBSTACLE_DANGER,
@@ -364,28 +365,59 @@ function MarkerInk({ url, size }: { url: string; size: number }) {
   return <mesh position={[0, 0, 0.0002]}><planeGeometry args={[size, size]} /><meshBasicMaterial map={texture} toneMapped={false} /></mesh>;
 }
 
+/** Loads an obstacle's photo without suspending the scene, and keeps showing the previous photo until the new one
+ *  has loaded, so a rescan does not make the object blink. */
+function useObstaclePhoto(url: string | undefined) {
+  const [photo, setPhoto] = useState<THREE.Texture | null>(null);
+  useEffect(() => {
+    if (!url) { setPhoto(null); return; }
+    let cancelled = false;
+    new THREE.TextureLoader().load(url, (loaded) => {
+      if (cancelled) { loaded.dispose(); return; }
+      loaded.colorSpace = THREE.SRGBColorSpace;
+      loaded.anisotropy = 4;
+      setPhoto(loaded);
+    });
+    return () => { cancelled = true; };
+  }, [url]);
+  useEffect(() => () => photo?.dispose(), [photo]);
+  return photo;
+}
+
 function ObstacleMesh({ obstacle: o, danger }: { obstacle: Obstacle; danger: boolean }) {
   const height = obstacleHeight(o);
   const color = obstacleColor(o);
   const outline = <Line points={obstacleOutline(o).map((p) => [p.x, p.y, height + 0.001] as [number, number, number])}
     color={danger ? OBSTACLE_DANGER : "#334155"} lineWidth={danger ? 2 : 1} dashed={o.height === undefined} dashSize={0.01} gapSize={0.006} />;
 
+  // State arrives 10 times a second with a new points array each time. The geometry is rebuilt only when the
+  // contour itself changes.
+  const contour = hasContour(o) ? o.points!.map((p) => `${p.x},${p.y}`).join(" ") : "";
   const extruded = useMemo(() => {
-    if (o.shape !== "polygon" || !o.points?.length) return null;
-    const pts = o.points.map((p) => new THREE.Vector2(p.x - o.x, p.y - o.y));
+    if (!contour) return null;
+    const pts = o.points!.map((p) => new THREE.Vector2(p.x - o.x, p.y - o.y));
     // ExtrudeGeometry needs counter-clockwise winding or the normals invert
     if (THREE.ShapeUtils.isClockWise(pts)) pts.reverse();
     return new THREE.ExtrudeGeometry(new THREE.Shape(pts), {
       depth: height,
       bevelEnabled: false,
     });
-  }, [o.points, o.x, o.y, height, o.shape]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contour, o.x, o.y, height]);
 
   useEffect(() => () => extruded?.dispose(), [extruded]);
+  const photo = useObstaclePhoto(o.textureUrl);
+  // The photo lies on the top face, covering the oriented box. It is transparent outside the object's contour.
+  const decal = photo && (
+    <mesh position={[o.x, o.y, height + 0.0006]} rotation={[0, 0, o.yaw]}>
+      <planeGeometry args={[o.width ?? 0.2, o.length ?? 0.2]} />
+      <meshBasicMaterial map={photo} transparent alphaTest={0.5} toneMapped={false} />
+    </mesh>
+  );
 
   if (extruded) {
     return (
-      <>{outline}<mesh geometry={extruded} position={[o.x, o.y, 0]} castShadow receiveShadow>
+      <>{outline}{decal}<mesh geometry={extruded} position={[o.x, o.y, 0]} castShadow receiveShadow>
         <meshStandardMaterial color={color} roughness={0.8} />
       </mesh></>
     );
@@ -406,7 +438,7 @@ function ObstacleMesh({ obstacle: o, danger }: { obstacle: Obstacle; danger: boo
   }
 
   return (
-    <>{outline}<mesh
+    <>{outline}{decal}<mesh
       position={[o.x, o.y, height / 2]}
       rotation={[0, 0, o.yaw]}
       castShadow

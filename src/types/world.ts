@@ -90,6 +90,10 @@ export type Obstacle = {
   height?: number; // vertical size, 3D only
   tagId?: number; // only if source = "tag"
   confidence?: number; // 0 to 1, detector score
+  label?: string; // what the camera thinks it is, e.g. "green box"
+  // Top-down photo of the object, transparent outside its outline. Image x runs along `width` (the yaw
+  // direction) and the top row is the far side along `length`. The URL changes when the picture changes.
+  textureUrl?: string;
 };
 
 /**

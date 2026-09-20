@@ -10,6 +10,7 @@
 // GET / serves controller.html, a manual controller that sends the same /ws commands, so it walks with the drive
 // settings above where the firmware's captive portal always uses the firmware gaits.
 // POST /calibrate measures the robot's real walking and turning with the camera and saves motion.json.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -213,9 +214,10 @@ const server = http.createServer((request, response) => {
   if (request.url === "/state") return reply(200, buildState());
   if (request.url === "/obstacles" && request.method === "GET") return reply(200, manualObstacles);
   if (request.url.startsWith("/textures/")) {
-    const png = textures.get(decodeURIComponent(request.url.slice("/textures/".length).replace(/\.png$/, "")));
+    const png = textures.get(decodeURIComponent(request.url.slice("/textures/".length).replace(/\.png(\?.*)?$/, "")));
     if (!png) return reply(404, { error: "no such texture" });
-    response.writeHead(200, { "Content-Type": "image/png", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" });
+    // The URL carries a hash of the picture, so a cached copy is never out of date.
+    response.writeHead(200, { "Content-Type": "image/png", "Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=3600" });
     return response.end(png);
   }
   if (request.url === "/objects" && request.method === "GET") return reply(200, cvObstacles);
@@ -256,8 +258,11 @@ const server = http.createServer((request, response) => {
           manualObstacles = JSON.parse(text).map((o, i) => {
             const { texture, ...rest } = { id: `manual-${i + 1}`, source: "manual", yaw: 0, ...o };
             if (!texture) return rest;
-            textures.set(rest.id, Buffer.from(texture, "base64"));
-            return { ...rest, textureUrl: `http://localhost:${PORT}/textures/${encodeURIComponent(rest.id)}.png` };
+            const png = Buffer.from(texture, "base64");
+            textures.set(rest.id, png);
+            // The hash makes the URL change exactly when the picture changes, which is what tells the UI to reload it.
+            const version = crypto.createHash("sha1").update(png).digest("hex").slice(0, 10);
+            return { ...rest, textureUrl: `http://localhost:${PORT}/textures/${encodeURIComponent(rest.id)}.png?v=${version}` };
           });
           reply(200, manualObstacles);
         }
