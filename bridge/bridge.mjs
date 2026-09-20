@@ -19,6 +19,7 @@ import { WebSocketServer } from "ws";
 import { pixelToFloor } from "../pi/client/floor.js";
 import { GaitEngine } from "./gait.mjs";
 import { Navigator } from "./navigator.mjs";
+import { leavesArena } from "./planner.mjs";
 import { PoseFilter } from "./pose-filter.mjs";
 import { createVoiceHandler } from "./voice.mjs";
 
@@ -59,7 +60,17 @@ const savedMotion = fs.existsSync(MOTION_FILE) ? JSON.parse(fs.readFileSync(MOTI
 // Movement goes through the firmware's own gaits (mode "firmware") or through gait.mjs (mode "software").
 const drive = { mode: "firmware", gait: "trot", trim: 0, frameDelay: 100, ...(fs.existsSync(DRIVE_FILE) ? JSON.parse(fs.readFileSync(DRIVE_FILE, "utf8")) : {}) };
 const gaitEngine = new GaitEngine((servos) => sendToRobot({ servos }), drive);
+// Every walking command passes through here: manual driving, voice, goto and its stuck recovery. A walk that would
+// take a tracked robot into the closed strip along the table's edge (planner.mjs) is replaced by a stop.
+let edgeStops = 0;
+let latestState = null;  // the state of the last 100 ms tick, for the edge check
 function move(command, face = {}) {
+  const robot = latestState?.robots[0];
+  if (robot?.tracking && leavesArena(robot, latestState.arena, command)) {
+    edgeStops++;
+    move("stop");
+    return false;
+  }
   if (drive.mode !== "software") return sendToRobot({ command, ...face });
   if (Object.keys(face).length) sendToRobot(face);
   gaitEngine.set(command);
@@ -166,7 +177,7 @@ function buildState() {
     robots: robot ? [robot] : [],
     obstacles: [...(arm ? [arm] : []), ...cvObstacles, ...manualObstacles],
     ...(navigator.goal ? { goal: navigator.goal, path: robot ? [{ x: robot.x, y: robot.y }, ...navigator.path] : navigator.path } : {}),
-    mission: navigator.status(),  // not part of the frontend schema: navigation state for display and debugging
+    mission: { ...navigator.status(), edgeStops },  // not part of the frontend schema: navigation state for display and debugging
   };
 }
 
@@ -180,6 +191,10 @@ function handleCommand(command) {
     return ack(true);
   }
   navigator.cancel();  // any manual command cancels a goto
+  if (latestState?.robots[0]?.tracking && leavesArena(latestState.robots[0], latestState.arena, command.type)) {
+    move("stop");
+    return ack(false, "the strip along the table's edge is closed to the robot");
+  }
   if (MOVES.includes(command.type) || command.type === "stop") sent = move(command.type, command.type === "stop" ? {} : face);
   else if (command.type === "pose") sent = command.pose ? (gaitEngine.set("stop"), sendToRobot({ command: command.pose, ...face })) : null;
   else if (command.type === "face") sent = command.face ? sendToRobot(face) : null;
@@ -301,7 +316,10 @@ sockets.on("connection", (socket) => {
 });
 
 setInterval(() => {
-  const state = buildState();
+  const state = latestState = buildState();
+  // A walk keeps going until the next command, so it is checked on every tick, not only when it starts.
+  const walk = (drive.mode === "software" && gaitEngine.command) || (robotState?.command ?? "");
+  if (state.robots[0]?.tracking && leavesArena(state.robots[0], state.arena, walk)) { edgeStops++; move("stop"); }
   navigator.step(state.robots[0], state.arena, state.obstacles);
   const message = JSON.stringify({ type: "state", data: state });
   for (const socket of sockets.clients) if (socket.readyState === WebSocket.OPEN) socket.send(message);

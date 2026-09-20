@@ -37,13 +37,14 @@ function simulate({ start, goal, obstacles = [], motion, robotModel = {}, blocke
   return { navigator, robot, seconds: now / 1000, switches, sent, pending };
 }
 
-let run = simulate({ start: { x: 0.1, y: 0.1, yaw: Math.PI }, goal: { x: 0.65, y: 0.5 } });
+// Starts and goals keep out of the closed 0.122 m strip along the edge (planner.mjs). A goal inside it is moved.
+let run = simulate({ start: { x: 0.15, y: 0.15, yaw: Math.PI }, goal: { x: 0.6, y: 0.45 } });
 assert.equal(run.navigator.state, "done");
-assert.ok(Math.hypot(run.robot.x - 0.65, run.robot.y - 0.5) < 0.07, "ends near the goal");
+assert.ok(Math.hypot(run.robot.x - 0.6, run.robot.y - 0.45) < 0.07, "ends near the goal");
 console.log(`PASS  open floor with delay, drift and noise: arrived in ${run.seconds.toFixed(0)} s, ${run.switches} gait changes`);
 
-const wall = { shape: "rect", x: 0.38, y: 0.2, yaw: 0, width: 0.04, length: 0.4 };
-run = simulate({ start: { x: 0.1, y: 0.1, yaw: 0 }, goal: { x: 0.66, y: 0.1 }, obstacles: [wall] });
+const wall = { shape: "rect", x: 0.38, y: 0.15, yaw: 0, width: 0.04, length: 0.26 };
+run = simulate({ start: { x: 0.15, y: 0.15, yaw: 0 }, goal: { x: 0.62, y: 0.15 }, obstacles: [wall] });
 assert.equal(run.navigator.state, "done");
 console.log(`PASS  around a wall: arrived in ${run.seconds.toFixed(0)} s, ${run.switches} gait changes`);
 
@@ -52,18 +53,18 @@ assert.equal(run.navigator.state, "done");
 assert.ok(run.sent.includes("backward") && !run.sent.includes("left") && !run.sent.includes("right"));
 console.log("PASS  close target behind the robot: walks backward without turning");
 
-run = simulate({ start: { x: 0.1, y: 0.1, yaw: 0 }, goal: { x: 0.6, y: 0.1 }, blockedUntil: 4000 });
+run = simulate({ start: { x: 0.15, y: 0.15, yaw: 0 }, goal: { x: 0.6, y: 0.15 }, blockedUntil: 4000 });
 assert.equal(run.navigator.state, "done");
 assert.equal(run.navigator.recoveries, 1);
 console.log("PASS  blocked for 4 s: detects stuck, backs off, turns, replans, arrives");
 
-run = simulate({ start: { x: 0.1, y: 0.1, yaw: 0 }, goal: { x: 0.6, y: 0.1 }, blockedUntil: 1e9 });
+run = simulate({ start: { x: 0.15, y: 0.15, yaw: 0 }, goal: { x: 0.6, y: 0.15 }, blockedUntil: 1e9 });
 assert.equal(run.navigator.state, "failed");
 assert.match(run.navigator.detail, /stuck/);
 console.log(`PASS  permanently blocked: gives up after 3 recoveries (${run.seconds.toFixed(0)} s)`);
 
 const fullWall = { ...wall, y: 0.3, length: 0.6 };
-run = simulate({ start: { x: 0.1, y: 0.1, yaw: 0 }, goal: { x: 0.66, y: 0.1 }, obstacles: [fullWall] });
+run = simulate({ start: { x: 0.15, y: 0.15, yaw: 0 }, goal: { x: 0.62, y: 0.15 }, obstacles: [fullWall] });
 assert.equal(run.navigator.state, "failed");
 assert.match(run.navigator.detail, /no walkable path/);
 console.log("PASS  wall across the whole arena: reports no walkable path");
@@ -75,7 +76,7 @@ assert.ok(m.turnStopLead > 0.1 && m.turnStopLead < 0.3, `turn stop lead ${m.turn
 console.log(`PASS  calibration: walk ${m.walkSpeed.toFixed(3)} m/s (true 0.045), turn ${m.turnRate.toFixed(2)} rad/s (true 0.55), veer ${m.veer.toFixed(2)} rad/m (true 0.6), keeps turning ${m.turnStopLead.toFixed(2)} rad after stop`);
 
 // Does calibration pay off? Same course with default and with measured motion values.
-const course = { start: { x: 0.1, y: 0.1, yaw: Math.PI }, goal: { x: 0.65, y: 0.5 } };
+const course = { start: { x: 0.15, y: 0.15, yaw: Math.PI }, goal: { x: 0.6, y: 0.45 } };
 const average = (motion) => { let s = 0, t = 0; for (let i = 0; i < 20; i++) { const r = simulate({ ...course, motion }); s += r.switches; t += r.seconds; } return [s / 20, t / 20]; };
 const [s0, t0] = average(undefined), [s1, t1] = average(run.navigator.motion);
 console.log(`INFO  20 runs each: default values ${s0.toFixed(1)} gait changes, ${t0.toFixed(0)} s. calibrated ${s1.toFixed(1)} gait changes, ${t1.toFixed(0)} s`);

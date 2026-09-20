@@ -1,7 +1,26 @@
 // Grid path planner over the arena. Pure functions, all units metres and radians, frontend frame.
+// The soft cost near obstacles, the table edge as a limit, and the rescue of a start that is too close to an
+// obstacle follow Arjun's nav/planner.py.
 
 export const CELL_M = 0.02;
-export const CLEARANCE_M = 0.1;  // robot half-diagonal (0.082) plus a margin: obstacles grow by this much
+const ROBOT_HALF_DIAGONAL_M = 0.082;
+export const CLEARANCE_M = 0.1;  // robot half-diagonal plus a margin: obstacles grow by this much
+// The strip of table that holds the corner markers is closed to the robot: no part of it may ever be there. The
+// arena is the rectangle between the marker centres, and the markers are TAG_M wide and flush with the table's
+// corners. The strip therefore reaches TAG_M / 2 into the arena, and the robot's centre has to stay its
+// half-diagonal further in: 0.04 + 0.082 = 0.122 m from the arena's edge. On a 0.63 m arena that leaves a
+// 0.386 m square for the centre. This is a hard limit for planning (below) and for walking (leavesArena).
+export const TAG_M = 0.08;
+export const EDGE_MARGIN_M = TAG_M / 2 + ROBOT_HALF_DIAGONAL_M;
+// A free cell costs up to 1 + SOFT_WEIGHT times its length right at a limit, falling to 1 SOFT_BAND_M further out.
+// This centres paths in gaps, where a plain shortest path runs along the limit and any walking error puts the
+// robot against the obstacle. The band is 5 cm because the robot's centre only has a 0.386 m square to move in:
+// a wider band covered most of it and bent paths that could be straight.
+const SOFT_BAND_M = 0.05;
+const SOFT_WEIGHT = 3;
+// A straight line replaces a bent stretch of path when it costs at most this much more. Every bend is a stop and
+// a turn in place for the robot, so a slightly dearer straight line is the better trade.
+const SHORTCUT_TOLERANCE = 1.15;
 
 function distanceToSegment(p, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y, lengthSq = dx * dx + dy * dy;
@@ -31,9 +50,22 @@ export function distanceToObstacle(p, obstacle) {
   return ox <= 0 && oy <= 0 ? Math.max(ox, oy) : Math.hypot(Math.max(ox, 0), Math.max(oy, 0));
 }
 
+// How far a point is inside the closed strip along the arena's edge. 0 when it is outside the strip.
+function edgeDepth(p, arena) {
+  return Math.max(0, EDGE_MARGIN_M - Math.min(p.x, arena.width - p.x, p.y, arena.length - p.y));
+}
+
+// True when walking with this command takes the robot into the closed strip, or deeper into it. Turning is always
+// allowed, and so is walking out of the strip or along it, so that a robot that ended up there can leave.
+export function leavesArena(robot, arena, command) {
+  if ((command !== "forward" && command !== "backward") || !(arena?.width > 0 && arena?.length > 0)) return false;
+  const sign = command === "forward" ? 1 : -1, ahead = 0.02;
+  const next = { x: robot.x + sign * Math.cos(robot.yaw) * ahead, y: robot.y + sign * Math.sin(robot.yaw) * ahead };
+  return edgeDepth(next, arena) > edgeDepth(robot, arena) + 1e-9;
+}
+
 // A* over an 8-connected grid. Returns waypoints from start to goal, or null when no walkable path exists.
 // A goal inside an obstacle (for example "go to the chocolate") is replaced by the nearest free cell.
-// The start cell is always treated as free, because the robot is already there.
 export function planPath(start, goal, arena, obstacles, clearance = CLEARANCE_M) {
   const cols = Math.max(1, Math.ceil(arena.width / CELL_M)), rows = Math.max(1, Math.ceil(arena.length / CELL_M));
   const centre = (i) => ({ x: ((i % cols) + 0.5) * CELL_M, y: (Math.floor(i / cols) + 0.5) * CELL_M });
@@ -41,25 +73,36 @@ export function planPath(start, goal, arena, obstacles, clearance = CLEARANCE_M)
     const cx = Math.min(cols - 1, Math.max(0, Math.floor(p.x / CELL_M))), cy = Math.min(rows - 1, Math.max(0, Math.floor(p.y / CELL_M)));
     return cy * cols + cx;
   };
-  const blocked = new Uint8Array(cols * rows);
+  const blocked = new Uint8Array(cols * rows), cellCost = new Float32Array(cols * rows);
   for (let i = 0; i < blocked.length; i++) {
     const p = centre(i);
-    blocked[i] = obstacles.some((o) => distanceToObstacle(p, o) < clearance) ? 1 : 0;
+    // slack: how far the robot's centre is beyond the nearest limit, an obstacle's clearance or the table edge
+    let slack = Math.min(p.x, arena.width - p.x, p.y, arena.length - p.y) - EDGE_MARGIN_M;
+    for (const o of obstacles) slack = Math.min(slack, distanceToObstacle(p, o) - clearance);
+    blocked[i] = slack < 0 ? 1 : 0;
+    cellCost[i] = 1 + SOFT_WEIGHT * Math.max(0, Math.min(1, 1 - slack / SOFT_BAND_M));
   }
-  const startCell = cellOf(start);
-  blocked[startCell] = 0;
-  let goalCell = cellOf(goal), goalMoved = false;
-  if (blocked[goalCell]) {
+  const nearestFree = (to) => {
     let best = -1, bestDistance = Infinity;
     for (let i = 0; i < blocked.length; i++) {
       if (blocked[i]) continue;
-      const p = centre(i), d = Math.hypot(p.x - goal.x, p.y - goal.y);
+      const p = centre(i), d = Math.hypot(p.x - to.x, p.y - to.y);
       if (d < bestDistance) { best = i; bestDistance = d; }
     }
-    if (best < 0) return null;
-    goalCell = best;
+    return best;
+  };
+  // A robot that stands closer to an obstacle or the edge than the limit first walks straight to the nearest free
+  // cell. Treating only its own cell as free left it walled in by blocked neighbours, and the plan failed.
+  let startCell = cellOf(start);
+  const rescued = blocked[startCell] === 1;
+  if (rescued) startCell = nearestFree(start);
+  if (startCell < 0) return null;
+  let goalCell = cellOf(goal), goalMoved = false;
+  if (blocked[goalCell]) {
+    goalCell = nearestFree(goal);
     goalMoved = true;
   }
+  if (goalCell < 0) return null;
 
   const cost = new Float64Array(cols * rows).fill(Infinity), from = new Int32Array(cols * rows).fill(-1);
   const heuristic = (i) => Math.hypot((i % cols) - (goalCell % cols), Math.floor(i / cols) - Math.floor(goalCell / cols));
@@ -81,7 +124,7 @@ export function planPath(start, goal, arena, obstacles, clearance = CLEARANCE_M)
         const next = ny * cols + nx;
         // no cutting diagonally between two blocked cells
         if (blocked[next] || (dx !== 0 && dy !== 0 && (blocked[cy * cols + nx] || blocked[ny * cols + cx]))) continue;
-        const candidate = cost[current] + Math.hypot(dx, dy);
+        const candidate = cost[current] + Math.hypot(dx, dy) * (cellCost[current] + cellCost[next]) / 2;
         if (candidate < cost[next]) {
           cost[next] = candidate;
           from[next] = current;
@@ -94,21 +137,31 @@ export function planPath(start, goal, arena, obstacles, clearance = CLEARANCE_M)
 
   const cells = [];
   for (let i = goalCell; i !== -1; i = from[i]) cells.unshift(i);
-  const points = [{ x: start.x, y: start.y }, ...cells.slice(1, -1).map(centre), goalMoved ? centre(goalCell) : { x: goal.x, y: goal.y }];
+  const points = [{ x: start.x, y: start.y }, ...(rescued ? [centre(startCell)] : []), ...cells.slice(1, -1).map(centre),
+    goalMoved ? centre(goalCell) : { x: goal.x, y: goal.y }];
 
-  // Keep only the corners: drop a waypoint when the straight line past it stays clear of every obstacle.
-  const clear = (a, b) => {
-    const steps = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (CELL_M / 2));
-    for (let k = 1; k < steps; k++) {
-      const p = { x: a.x + ((b.x - a.x) * k) / steps, y: a.y + ((b.y - a.y) * k) / steps };
-      if (cellOf(p) !== startCell && blocked[cellOf(p)]) return false;
+  // Cost of walking the straight line from a to b, in the same units as the search. Infinity when it is blocked.
+  const lineCost = (a, b) => {
+    const length = Math.hypot(b.x - a.x, b.y - a.y), steps = Math.max(1, Math.ceil(length / (CELL_M / 2)));
+    let total = 0;
+    for (let k = 0; k <= steps; k++) {
+      const cell = cellOf({ x: a.x + ((b.x - a.x) * k) / steps, y: a.y + ((b.y - a.y) * k) / steps });
+      if (blocked[cell]) return Infinity;
+      total += cellCost[cell];
     }
-    return true;
+    return (total / (steps + 1)) * length / CELL_M;
   };
-  const path = [points[0]];
-  for (let i = 0; i < points.length - 1; ) {
+  // Keep only the corners: drop the waypoints between two points when the straight line between them is clear and
+  // costs no more than SHORTCUT_TOLERANCE times the stretch it replaces. The first leg of a rescued start is kept.
+  const first = rescued ? 1 : 0;
+  const path = points.slice(0, first + 1);
+  for (let i = first; i < points.length - 1; ) {
     let j = points.length - 1;
-    while (j > i + 1 && !clear(points[i], points[j])) j--;
+    for (; j > i + 1; j--) {
+      let stretch = 0;
+      for (let k = i; k < j; k++) stretch += lineCost(points[k], points[k + 1]);
+      if (lineCost(points[i], points[j]) <= stretch * SHORTCUT_TOLERANCE) break;
+    }
     path.push(points[j]);
     i = j;
   }
