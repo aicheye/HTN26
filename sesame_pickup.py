@@ -22,7 +22,7 @@ it, carries it aside, sets it down and returns; then it waits until the Sesame i
 
 Keys:  space / g  find the Sesame and run the whole pick-and-place
        p          plan only: print every phase and whether it is reachable, no motion
-       z          go to the ready pose (calibrated midpoint, gripper open)
+       z          go to the rest pose (folded, where a run starts)
        o          open the gripper where it is
        q          quit (torque stays on)
 
@@ -38,7 +38,7 @@ Phases, all solved through so101_ik.ik and checked before the first move:
   carry     straight line at that height to the drop point, jaws kept at the same angle to the body
   lower     straight down to the grasp height, tilting back to vertical for the release
   release   open the gripper to the demo's open value
-  retract   straight up, then a slow joint-space slew to the ready pose
+  retract   straight up, then a slow joint-space slew to zero and down into the folded rest pose
 """
 import argparse
 import json
@@ -65,7 +65,9 @@ CARRY_CM_PER_S = 5.0
 VERTICAL_CM_PER_S = 4.0
 RELEASE_S = 1.0
 DROP_CANDIDATES = [(0, 10), (0, -10), (0, 7), (0, -7), (-4, 8), (-4, -8), (-6, 0), (-3, 4), (-3, -4), (0, 0)]   # (0, 0): set it back down in place
-READY = {j: 0.0 for j in JOINTS}
+READY = {j: 0.0 for j in JOINTS}                                     # LeRobot's zero: the calibrated mid-range pose
+REST = {"shoulder_pan": 0.0, "shoulder_lift": -102.0, "elbow_flex": 97.0, "wrist_flex": 79.0, "wrist_roll": 0.0}   # folded on the table, where a run starts
+GRIPPER_REST = 5.0
 RETRIGGER_CM = 5.0      # auto mode: grip again once the Sesame is this far from where it was last set down
 CORRECTION_FILE = "grip_correction.json"
 # ahead, left, up (cm) relative to the kept correction, tried in this order after a miss; 2 cm steps on every axis
@@ -286,6 +288,12 @@ def plan(demo, frame0, obs, args):
     return traj, info
 
 
+def go_home(arm, grip=GRIPPER_REST):
+    """Back to the folded rest pose: unfold to zero first (a clean, checked path), then fold down."""
+    arm.slew(READY, grip)
+    arm.slew(REST, grip)
+
+
 def execute(arm, traj, speed=1.0):
     _, q0, g0 = traj[0]
     arm.slew(q0, g0)
@@ -322,7 +330,7 @@ def main():
     ap.add_argument("--once", action="store_true", help="run once without the key loop")
     ap.add_argument("--auto", action="store_true", help="grip whenever the Sesame is seen, no keypress; q quits")
     ap.add_argument("--no-check", action="store_true", help="do not judge the grip by whether the tag moved")
-    ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[0.0, 0.0], help="the arm's base origin relative to its tag (cm); 0 0 = the base is where the tag is")
+    ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[-1.0, 0.0], help="the arm's base origin relative to its tag (cm). -1 0: measured on 2026-09-20, the gripper landed 1 cm past the tag with 0 0")
     ap.add_argument("--tag-turn", type=float, default=0.0, help="the arm's forward relative to its tag's up (deg)")
     ap.add_argument("--dry-run", action="store_true", help="plan only, never connect to the arm")
     args = ap.parse_args()
@@ -384,14 +392,14 @@ def main():
             execute(arm, traj, args.speed)
         except Exception as e:                      # a refused or failed move mid-way: still go back to zero
             print(f"  MOVE STOPPED: {type(e).__name__}: {str(e)[:200]}")
-            print("  returning to zero")
+            print("  returning to the rest pose")
             try:
-                arm.slew(READY, GRIPPER_OPEN_AUTO)
+                go_home(arm)
             except Exception as e2:
-                print(f"  could not return to zero either: {str(e2)[:120]}. Move the arm by hand to a free pose and press z.")
+                print(f"  could not return to rest either: {str(e2)[:120]}. Move the arm by hand to a free pose and press z.")
             return False
-        print("  back to zero")
-        arm.slew(READY, traj[-1][2])
+        print("  back to the rest pose")
+        go_home(arm)
         if not args.no_check:
             after = tracker.wait_for_robot(15.0, say=None)
             if after is None:
@@ -459,9 +467,9 @@ def main():
                 run(True)
             elif key == "z":
                 try:
-                    arm.slew(READY, 40.0); print("\n  ready pose")
+                    go_home(arm); print("\n  rest pose")
                 except Exception as e:
-                    print(f"\n  cannot reach zero from here: {str(e)[:120]}")
+                    print(f"\n  cannot reach the rest pose from here: {str(e)[:120]}")
             elif key == "o":
                 q = arm.read(); arm.send({j: q[j] for j in JOINTS}, 40.0); print("\n  gripper opened")
             elif key == "q":
