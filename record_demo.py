@@ -112,10 +112,10 @@ def main():
     poller = None
     if not args.no_tracker:
         tracker = Tracker(args.tracker)
-        first = tracker.observe()
+        first = tracker.wait_for_robot(40.0)
         if first is None:
-            print(f"no tracker sees the quadruped at {tracker.host} (units {tracker.units}).")
-            print("Start it with sh pi/live.sh and check the tag is in view, or record with --no-tracker.")
+            print(f"no tracker reported the quadruped at {tracker.host} (units {tracker.units}) in 40 s.")
+            print("Are the trackers running (sh run.sh trackers) and is the tag in view? Or record with --no-tracker.")
             return 1
         print(f"tracker: camera {first['unit']} sees the quadruped at ({first['robot']['x']:.1f}, {first['robot']['y']:.1f}) cm heading {first['robot']['heading']:.0f}")
         poller = Poller(tracker, period=0.3)
