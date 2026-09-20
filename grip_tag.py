@@ -20,7 +20,7 @@ import numpy as np
 from replay_demo import Arm, FPS
 from sesame_pickup import READY, REST, GRIPPER_REST, go_home
 from sesame_tracker import Tracker, ensure_trackers, open_camera_page
-from so101_ik import JOINTS, ik, fk
+from so101_ik import JOINTS, ik, fk, TABLE_Z
 from so101_safe import default_port
 
 OPEN_DEFAULT, CLOSED = 45.0, 0.0     # wider than the body so the jaws land around the two lips a cm or two off (60 was too wide)
@@ -49,11 +49,11 @@ def line(a, b, seconds, grip_a, grip_b=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tracker"); ap.add_argument("--port", default=default_port())
-    ap.add_argument("--grip-z", type=float, default=9.0, help="cm above the arm's base where the jaws close (demo: 9.0)")
+    ap.add_argument("--grip-z", type=float, default=8.5, help="cm above the arm's base where the jaws close (demo 9.0 was a few mm high)")
     ap.add_argument("--jaw-angle", type=float, default=90.0, help="jaw axis relative to the tag's top edge: 90 = across the tag (the lips are at its left and right edges); 0 if the tag is stuck rotated 90 deg on the body")
     ap.add_argument("--open", type=float, default=OPEN_DEFAULT, help="gripper opening before the grip (0 closed .. 100 fully open)")
     ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[0.0, 0.0], help="the arm's base relative to its tag (cm)")
-    ap.add_argument("--hover", type=float, default=5.0); ap.add_argument("--lift", type=float, default=10.0, help="cm to lift after the grip")
+    ap.add_argument("--hover", type=float, default=5.0); ap.add_argument("--lift", type=float, default=10.0, help="height off the ground to carry at, cm (the table is 2 cm below the arm's base)")
     ap.add_argument("--carry", type=float, nargs=2, metavar=("DX", "DY"), default=[0.0, 10.0], help="cm to carry the Sesame at the lifted height, ahead and left in the arm's frame, before setting it down")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -87,21 +87,22 @@ def main():
     if q_grip is None:
         print("   IK: unreachable at every tilt from straight down to 40 deg"); return 1
     q_hover, p_hover = solve(x, y, args.grip_z + args.hover, jaw)
-    q_lift, p_lift = solve(x, y, args.grip_z + args.lift, jaw)
+    carry_z = args.lift - 100 * TABLE_Z                        # cm above the base: --lift above the table
+    q_lift, p_lift = solve(x, y, carry_z, jaw)
     if q_hover is None or q_lift is None:
         print("   IK: the hover/lift height above the target is unreachable; lower --hover/--lift"); return 1
     # the drop point: --carry from the pick at the lifted height, then down to the grip height; if that is out of
     # reach, try the same distance the other way, then closer, then set it down where it was picked up
     drop = None
     for dx, dy in ([tuple(args.carry), (args.carry[0], -args.carry[1]), (-args.carry[1] * 0.0 - 6.0, 0.0), (0.0, 0.0)]):
-        q_c, p_c = solve(x + dx, y + dy, args.grip_z + args.lift, jaw)
+        q_c, p_c = solve(x + dx, y + dy, carry_z, jaw)
         q_d, p_d = solve(x + dx, y + dy, args.grip_z, jaw)
         if q_c is not None and q_d is not None:
             drop = (dx, dy, q_c, q_d); break
     dx, dy, q_carry, q_drop = drop
     f = fk(q_grip)
     print(f"4. IK: grip pitch {pitch} deg" + (" (straight down)" if pitch == -90 else " (tilted to reach)") + f", hover pitch {p_hover}, lift pitch {p_lift}")
-    print(f"   after the grip: lift {args.lift:.0f} cm, carry {dx:+.0f} cm ahead / {dy:+.0f} cm left to x={x+dx:.1f} y={y+dy:.1f}, lower, let go, lift, rest")
+    print(f"   after the grip: lift to {args.lift:.0f} cm off the ground ({carry_z:.1f} above the base), carry {dx:+.0f} cm ahead / {dy:+.0f} cm left to x={x+dx:.1f} y={y+dy:.1f}, lower, let go, lift, rest")
     print(f"   joints at the grip: " + "  ".join(f"{j.split('_')[0]}={q_grip[j]:.1f}" for j in JOINTS))
     got = (f["jaw_yaw"] - tag_rel + 180) % 360 - 180
     ok = min(abs(got - args.jaw_angle), abs((got - args.jaw_angle + 180) % 360 - 180)) < 0.5   # +-180 is the same jaw axis
@@ -121,7 +122,7 @@ def main():
         for q, g in line(q_grip, q_grip, 1.0, args.open, CLOSED):
             arm.send(q, g); time.sleep(1 / FPS)
         time.sleep(0.5)
-        print(f"   lift {args.lift:.0f} cm")
+        print(f"   lift to {args.lift:.0f} cm off the ground")
         for q, g in line(q_grip, q_lift, 2.5, CLOSED):
             arm.send(q, g); time.sleep(1 / FPS)
         time.sleep(0.3)
