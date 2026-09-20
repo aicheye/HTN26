@@ -23,6 +23,7 @@ bridge/walk-log.json
 recordings/
 vision/models/
 pi/host
+pi/robot-host
 pi/client/objects.json
 pi/client/objects.tmp
 vision/scan.log

@@ -27,7 +27,10 @@ const PORT = Number(process.env.PORT ?? 8080);
 const HOST_FILE = new URL("../pi/host", import.meta.url);
 const TRACKER_HOST = process.env.TRACKER_HOST ?? (fs.existsSync(HOST_FILE) ? fs.readFileSync(HOST_FILE, "utf8").trim() : "qnxpi78.local");
 const TRACKER_PORT = Number(process.env.TRACKER_PORT ?? 9003);
-const ROBOT_URL = process.env.ROBOT_URL ?? "ws://192.168.4.1:81";
+// pi/robot-host holds the robot's address on a shared network (written by pi/robot-join-wifi.sh). Without it the
+// robot is reached on its own access point.
+const ROBOT_HOST_FILE = new URL("../pi/robot-host", import.meta.url);
+const ROBOT_URL = process.env.ROBOT_URL ?? `ws://${fs.existsSync(ROBOT_HOST_FILE) ? fs.readFileSync(ROBOT_HOST_FILE, "utf8").trim() : "192.168.4.1"}:81`;
 
 const ROBOT_TAG = 0, ARM_TAG = 5, CORNER_TAGS = [1, 2, 3, 4];
 const ROBOT_FOOTPRINT = { width: 0.105, length: 0.125 };  // metres, from the frontend's sample state
