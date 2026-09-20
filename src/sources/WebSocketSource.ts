@@ -81,13 +81,17 @@ export class WebSocketSource implements StateSource {
     this.ws = null;
   }
 
-  sendCommand(c: Command) {
+  sendCommand(c: Command, queueIfDisconnected = true) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       const envelope: Envelope = { type: "command", data: c };
       this.ws.send(JSON.stringify(envelope));
-    } else {
+    } else if (queueIfDisconnected) {
       this.queue.push(c);
+    } else {
+      this.ackSubs.forEach((cb) => cb({ commandId: c.id, ok: false, error: "Not connected; voice action was not queued." }));
+      return false;
     }
+    return true;
   }
 
   private status(s: ConnectionStatus) {

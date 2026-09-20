@@ -20,6 +20,8 @@ import {
 import { SesameHttpBridge } from "../robot/sesameApi";
 import type { MockScenarioId } from "../data/mockScenarios";
 import type { Ack, Command, CommandType, WorldState } from "../types/world";
+import type { StateSource } from "../sources/StateSource";
+import { useVoiceControl } from "./useVoiceControl";
 
 const ACK_TIMEOUT_MS = 4000;
 
@@ -28,7 +30,7 @@ export type LogEntry = {
   ack?: Ack;
 };
 
-type StateContextValue = {
+type StateContextValue = ReturnType<typeof useVoiceControl> & {
   state: WorldState | null;
   status: ConnectionStatus;
   sourceKind: SourceKind;
@@ -61,18 +63,16 @@ function nextCommandId() {
 }
 
 export function StateProvider({ children }: { children: ReactNode }) {
-  const [sourceKind, setSourceKind] = useState<SourceKind>(DEFAULT_SOURCE);
+  const [sourceKind, setSourceKindState] = useState<SourceKind>(DEFAULT_SOURCE);
   const [wsUrl, setWsUrlState] = useState<string>(getWsUrl());
   const [state, setState] = useState<WorldState | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
-  const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null);
+  const [selectedRobotId, setSelectedRobotIdState] = useState<string | null>(null);
   const [speed, setSpeed] = useState(1);
   const [log, setLog] = useState<LogEntry[]>([]);
-
-  const setWsUrl = useCallback((url: string) => {
-    persistWsUrl(url);
-    setWsUrlState(getWsUrl());
-  }, []);
+  const worldRef = useRef<WorldState | null>(null);
+  const statusRef = useRef<ConnectionStatus>("connecting");
+  const receivedRef = useRef(0);
 
   const source = useMemo(
     () => createSource(sourceKind, wsUrl),
@@ -86,33 +86,8 @@ export function StateProvider({ children }: { children: ReactNode }) {
   speedRef.current = speed;
   const ackedRef = useRef<Set<string>>(new Set());
 
-  useEffect(() => {
-    setState(null);
-    const unsubState = source.subscribe((s) => {
-      setState(s);
-      if (!selectedRef.current && s.robots.length) {
-        selectedRef.current = s.robots[0].id;
-        setSelectedRobotId(s.robots[0].id);
-      }
-    });
-    const unsubAck = source.onAck?.((ack) => {
-      ackedRef.current.add(ack.commandId);
-      setLog((prev) =>
-        prev.map((e) => (e.command.id === ack.commandId ? { ...e, ack } : e)),
-      );
-    });
-    const unsubStatus = source.onStatus?.(setStatus);
-    return () => {
-      unsubState();
-      unsubAck?.();
-      unsubStatus?.();
-      source.stop?.();
-    };
-  }, [source]);
-
-  const send = useCallback(
-    (type: CommandType, extra?: Partial<Command>) => {
-      const robotId = selectedRef.current;
+  const dispatch = useCallback(
+    (destination: StateSource, robotId: string | null, type: CommandType, extra?: Partial<Command>, voice = false) => {
       if (!robotId) return;
       const command: Command = {
         id: nextCommandId(),
@@ -124,8 +99,8 @@ export function StateProvider({ children }: { children: ReactNode }) {
       };
       // log first: mock acks arrive synchronously
       setLog((prev) => [{ command }, ...prev].slice(0, LOG_MAX));
-      sourceRef.current.sendCommand(command);
-      robotBridge?.send(command);
+      const accepted = destination.sendCommand(command, !voice || type === "stop");
+      if (accepted !== false && (!voice || !(destination instanceof MockSource))) robotBridge?.send(command);
 
       window.setTimeout(() => {
         if (ackedRef.current.has(command.id)) return;
@@ -137,17 +112,93 @@ export function StateProvider({ children }: { children: ReactNode }) {
           ),
         );
       }, ACK_TIMEOUT_MS);
+      return accepted !== false;
     },
     [],
   );
+  const voice = useVoiceControl(() => {
+    const destination = sourceRef.current;
+    const robotId = selectedRef.current;
+    return {
+      state: worldRef.current, robotId, status: statusRef.current, receivedAt: receivedRef.current,
+      send: (type, extra) => dispatch(destination, robotId, type, extra, true),
+    };
+  }, wsUrl, sourceKind);
+  const { cancelVoice } = voice;
+
+  const setSourceKind = useCallback((kind: SourceKind) => {
+    if (kind === sourceKind) return;
+    cancelVoice();
+    worldRef.current = null;
+    setSourceKindState(kind);
+  }, [sourceKind, cancelVoice]);
+  const setWsUrl = useCallback((url: string) => {
+    persistWsUrl(url);
+    if (getWsUrl() === wsUrl) return;
+    cancelVoice();
+    worldRef.current = null;
+    setWsUrlState(getWsUrl());
+  }, [wsUrl, cancelVoice]);
+  const setSelectedRobotId = useCallback((id: string) => {
+    cancelVoice();
+    selectedRef.current = id;
+    setSelectedRobotIdState(id);
+  }, [cancelVoice]);
+
+  useEffect(() => {
+    worldRef.current = null;
+    receivedRef.current = 0;
+    statusRef.current = "connecting";
+    setState(null);
+    setStatus("connecting");
+    const unsubStatus = source.onStatus?.((next) => {
+      statusRef.current = next;
+      setStatus(next);
+      if (next !== "live") {
+        receivedRef.current = 0;
+        cancelVoice();
+      }
+    });
+    const unsubState = source.subscribe((s) => {
+      worldRef.current = s;
+      receivedRef.current = Date.now();
+      setState(s);
+      if (!s.robots.some((robot) => robot.id === selectedRef.current)) {
+        cancelVoice();
+        selectedRef.current = s.robots[0]?.id ?? null;
+        setSelectedRobotIdState(selectedRef.current);
+      }
+    });
+    const unsubAck = source.onAck?.((ack) => {
+      ackedRef.current.add(ack.commandId);
+      setLog((prev) =>
+        prev.map((e) => (e.command.id === ack.commandId ? { ...e, ack } : e)),
+      );
+    });
+    return () => {
+      cancelVoice();
+      unsubState();
+      unsubAck?.();
+      unsubStatus?.();
+      source.stop?.();
+    };
+  }, [source, cancelVoice]);
+
+  const send = useCallback((type: CommandType, extra?: Partial<Command>) => {
+    cancelVoice();
+    dispatch(sourceRef.current, selectedRef.current, type, extra);
+  }, [cancelVoice, dispatch]);
   const resetMockScenario = useCallback((id: MockScenarioId) => {
+    cancelVoice();
     if (sourceRef.current instanceof MockSource) sourceRef.current.resetScenario(id);
-  }, []);
+  }, [cancelVoice]);
   const runMockTest = useCallback(() => {
+    cancelVoice();
     if (sourceRef.current instanceof MockSource) sourceRef.current.runScenarioTest();
-  }, []);
+  }, [cancelVoice]);
 
   const value: StateContextValue = {
+    ...voice,
     state,
     status,
     sourceKind,

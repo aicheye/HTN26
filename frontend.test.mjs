@@ -395,6 +395,162 @@ test("Top-down projection keeps real dimensions and yaw", () => {
   near(Math.max(...points.map((p) => p.y)) - Math.min(...points.map((p) => p.y)), 0.084);
 });
 
+const { parseVoiceCommand, normalizeVoiceName, resolveVoiceTarget, voiceReadiness, validateLandmarkName } = await import("./src/state/voiceCommands.ts");
+
+function voiceWorld() {
+  const source = new MockSource();
+  return structuredClone(source.state);
+}
+
+test("Voice parser accepts only complete supported commands", () => {
+  for (const phrase of ["forward", "Go forward!", "Sesame, move forwards please."]) {
+    assert.deepEqual(parseVoiceCommand(phrase), { type: "forward", durationMs: 500 });
+  }
+  for (const phrase of ["back up", "move backward", "go backwards"]) {
+    assert.deepEqual(parseVoiceCommand(phrase), { type: "backward", durationMs: 500 });
+  }
+  assert.deepEqual(parseVoiceCommand("turn left"), { type: "left", durationMs: 500 });
+  assert.deepEqual(parseVoiceCommand("right"), { type: "right", durationMs: 500 });
+  assert.deepEqual(parseVoiceCommand("please stop"), { type: "stop" });
+  assert.deepEqual(parseVoiceCommand("emergency stop"), { type: "stop" });
+  assert.deepEqual(parseVoiceCommand("do a wave"), { type: "pose", pose: "wave" });
+  assert.deepEqual(parseVoiceCommand("go to Home Base"), { type: "goto", name: "home base" });
+});
+
+test("Voice parser rejects negation, compound commands, unsupported units and substring matches", () => {
+  for (const phrase of ["", "don't move forward", "do not stop", "never turn left", "forward then left", "forward and stop", "forward, stop", "unstoppable", "forwardish", "maybe forward", "go forward for ten seconds", "turn left 90 degrees", "go to home then dance", "go to", "go to home; stop", "stop?", "can you stop", "dance or wave"]) {
+    assert.equal(parseVoiceCommand(phrase), null, phrase);
+  }
+});
+
+test("Landmark names are canonical, unique, and usable by the voice grammar", () => {
+  assert.equal(normalizeVoiceName("  Home-Base  "), "home base");
+  assert.equal(validateLandmarkName("home", []), null);
+  assert.match(validateLandmarkName("HOME", [{ name: "home" }]), /already/i);
+  for (const name of ["", "home then dance", "don't move", "desk?", "a".repeat(41)]) {
+    assert.ok(validateLandmarkName(name, []), name);
+  }
+});
+
+test("Voice destinations resolve saved points, reject duplicates and stay within clear arena space", () => {
+  const state = voiceWorld();
+  state.obstacles = [];
+  const robot = state.robots[0];
+  const landmarks = [{ name: "home", kind: "point", point: { x: 0.3, y: 0.3 } }];
+  assert.deepEqual(resolveVoiceTarget("Home", landmarks, state, robot.id), { target: { x: 0.3, y: 0.3 } });
+  assert.match(resolveVoiceTarget("missing", landmarks, state, robot.id).error, /unknown/i);
+  assert.match(resolveVoiceTarget("home", [...landmarks, ...landmarks], state, robot.id).error, /ambiguous/i);
+  for (const point of [{ x: -1, y: 0.3 }, { x: 0, y: 0 }, { x: NaN, y: 0.3 }]) {
+    assert.ok(resolveVoiceTarget("home", [{ ...landmarks[0], point }], state, robot.id).error);
+  }
+  state.obstacles = [{ id: "block", source: "manual", shape: "circle", x: 0.3, y: 0.3, radius: 0.05, yaw: 0 }];
+  assert.match(resolveVoiceTarget("home", landmarks, state, robot.id).error, /clear|blocked/i);
+});
+
+test("Obstacle aliases resolve an approach point rather than the occupied centre", () => {
+  const state = voiceWorld();
+  state.arena = { width: 2, length: 2 };
+  state.robots[0].x = 0.3;
+  state.robots[0].y = 1;
+  const obstacle = { id: "obstacle-2", source: "tag", shape: "rect", x: 1, y: 1, width: 0.2, length: 0.3, yaw: Math.PI / 4 };
+  state.obstacles = [obstacle];
+  const landmarks = [{ name: "box", kind: "obstacle", obstacleId: obstacle.id }];
+  const result = resolveVoiceTarget("box", landmarks, state, state.robots[0].id);
+  assert.ok(result.target, result.error);
+  assert.ok(result.target.x < obstacle.x);
+  assert.ok(distanceTo(obstacle, result.target) >= Math.hypot(0.105, 0.125) / 2 + 0.03);
+  assert.ok(resolveVoiceTarget("obstacle 2", [], state, state.robots[0].id).target);
+  state.obstacles = [];
+  assert.match(resolveVoiceTarget("box", landmarks, state, state.robots[0].id).error, /no longer/i);
+});
+
+test("Voice readiness rejects disconnected, stale, uncalibrated and untracked worlds", () => {
+  const state = voiceWorld();
+  const id = state.robots[0].id;
+  assert.equal(voiceReadiness(state, id, "live", 1000, 1000), null);
+  assert.ok(voiceReadiness(state, id, "closed", 1000, 1000));
+  assert.ok(voiceReadiness(state, id, "live", 1000, 4001));
+  assert.ok(voiceReadiness(state, "missing", "live", 1000, 1000));
+  state.robots[0].tracking = false;
+  assert.ok(voiceReadiness(state, id, "live", 1000, 1000));
+  state.robots[0].tracking = true;
+  state.calibration.ok = false;
+  assert.ok(voiceReadiness(state, id, "live", 1000, 1000));
+});
+
+test("Voice movement stops once and an old timer cannot stop a newer manual command", async (t) => {
+  const { VoiceAction } = await import("./src/state/voiceSession.ts");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const action = new VoiceAction();
+  let stops = 0;
+  action.start(() => stops++, 500);
+  t.mock.timers.tick(499);
+  assert.equal(stops, 0);
+  t.mock.timers.tick(1);
+  assert.equal(stops, 1);
+  action.cancel();
+  assert.equal(stops, 1);
+  action.start(() => stops++, 500);
+  action.supersede();
+  t.mock.timers.tick(1000);
+  assert.equal(stops, 1);
+  action.start(() => stops++);
+  action.cancel();
+  assert.equal(stops, 2);
+});
+
+test("Speech session ignores interim, duplicate, cancelled and old-session results", async () => {
+  const { SpeechSession } = await import("./src/state/voiceSession.ts");
+  const recognizers = [];
+  class Recognition {
+    constructor() { recognizers.push(this); }
+    start() {}
+    abort() { this.aborted = true; }
+  }
+  const received = [];
+  const session = new SpeechSession(Recognition, () => {}, (text) => received.push(text));
+  const result = (text, isFinal = true) => ({ results: [{ 0: { transcript: text }, length: 1, isFinal }] });
+  session.start();
+  const firstResult = recognizers[0].onresult;
+  firstResult(result("forward", false));
+  assert.deepEqual(received, []);
+  firstResult(result("forward"));
+  firstResult(result("forward"));
+  assert.deepEqual(received, ["forward"]);
+  session.start();
+  const lateResult = recognizers[1].onresult;
+  session.cancel();
+  lateResult(result("backward"));
+  session.start();
+  lateResult(result("left"));
+  recognizers[2].onresult(result("stop"));
+  assert.deepEqual(received, ["forward", "stop"]);
+  assert.ok(recognizers.every((r) => r.aborted));
+  session.cancel();
+});
+
+test("Speech session reports denial, start failures and a bounded listening timeout", async (t) => {
+  const { SpeechSession } = await import("./src/state/voiceSession.ts");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const recognizers = [], updates = [];
+  class Recognition {
+    constructor() { recognizers.push(this); }
+    start() {}
+    abort() {}
+  }
+  const session = new SpeechSession(Recognition, (update) => updates.push(update), () => assert.fail("must not dispatch"));
+  session.start();
+  recognizers[0].onerror({ error: "not-allowed" });
+  assert.match(updates.at(-1).error, /permission/i);
+  session.start();
+  t.mock.timers.tick(10000);
+  assert.equal(updates.at(-1).listening, false);
+  assert.match(updates.at(-1).error, /timed out/i);
+  class Broken extends Recognition { start() { throw new Error("broken"); } }
+  new SpeechSession(Broken, (update) => updates.push(update), () => {}).start();
+  assert.match(updates.at(-1).error, /start/i);
+});
+
 test("Obstacle colour and unknown-height fallbacks do not invent measurements", () => {
   const obstacle = { id: "test", source: "cv", shape: "rect", x: 0.2, y: 0.3, yaw: Math.PI / 2, width: 0.1, length: 0.2 };
   assert.equal(obstacleColor({ ...obstacle, color: "#20A0f0" }), "#20A0f0");
@@ -406,4 +562,484 @@ test("Obstacle colour and unknown-height fallbacks do not invent measurements", 
   const points = obstacleOutline(obstacle);
   assert.deepEqual(points[0], points.at(-1));
   near(Math.max(...points.map((p) => p.x)) - Math.min(...points.map((p) => p.x)), 0.2);
+});
+
+const { VoiceExecutor, SpeechSession, speechRecognition } = await import("./src/state/voiceSession.ts");
+
+function voiceHarness() {
+  const state = voiceWorld();
+  state.obstacles = [];
+  const commands = [];
+  const snapshot = { state, robotId: state.robots[0].id, status: "live", receivedAt: Date.now(),
+    landmarks: [{ name: "home", kind: "point", point: { x: 0.3, y: 0.3 } }],
+    send: (type, extra) => commands.push({ type, ...extra }) };
+  return { snapshot, commands, executor: new VoiceExecutor(() => ({ ...snapshot })) };
+}
+
+test("Voice executor guards all actions but permits stop with stale or disconnected tracking", () => {
+  const { snapshot, commands, executor } = voiceHarness();
+  for (const status of ["closed", "connecting", "error"]) {
+    snapshot.status = status;
+    for (const phrase of ["forward", "wave", "go to home"]) assert.match(executor.execute(phrase), /Not sent/);
+  }
+  snapshot.status = "live";
+  snapshot.receivedAt -= 3000;
+  assert.match(executor.execute("left"), /fresh/);
+  snapshot.receivedAt = Date.now();
+  snapshot.state.robots[0].tracking = false;
+  assert.match(executor.execute("wave"), /tracked/);
+  snapshot.state.robots[0].tracking = true;
+  snapshot.state.arm.mode = "carrying";
+  assert.match(executor.execute("go to home"), /arm/);
+  assert.deepEqual(commands, []);
+  snapshot.status = "closed";
+  snapshot.state = null;
+  assert.equal(executor.execute("stop"), "Stop requested.");
+  assert.deepEqual(commands, [{ type: "stop" }]);
+  snapshot.robotId = null;
+  assert.match(executor.execute("stop"), /select a robot/);
+});
+
+test("Voice executor sends bounded pulses and manual takeover clears the pending stop", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { commands, executor } = voiceHarness();
+  assert.match(executor.execute("forward"), /500 ms/);
+  assert.deepEqual(commands, [{ type: "forward", durationMs: 500 }]);
+  t.mock.timers.tick(500);
+  assert.deepEqual(commands.at(-1), { type: "stop" });
+  executor.execute("left");
+  executor.cancel();
+  commands.push({ type: "backward" });
+  t.mock.timers.tick(1000);
+  assert.equal(commands.at(-1).type, "backward");
+  assert.equal(commands.filter((command) => command.type === "stop").length, 2);
+});
+
+test("Voice navigation resolves at execution, caps travel time, and cancels the original destination", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { snapshot, commands, executor } = voiceHarness();
+  assert.match(executor.execute("go to missing"), /Unknown/);
+  assert.match(executor.execute("forward and stop"), /Not sent/);
+  assert.deepEqual(commands, []);
+  executor.execute("go to home");
+  assert.deepEqual(commands[0], { type: "goto", target: { x: 0.3, y: 0.3 } });
+  t.mock.timers.tick(29999);
+  assert.equal(commands.length, 1);
+  t.mock.timers.tick(1);
+  assert.equal(commands.at(-1).type, "stop");
+  executor.execute("forward");
+  const newDestination = [];
+  snapshot.send = (type) => newDestination.push(type);
+  snapshot.robotId = "another-robot";
+  executor.cancel();
+  assert.equal(commands.at(-1).type, "stop");
+  assert.deepEqual(newDestination, []);
+});
+
+test("Active voice actions stop on tracking, calibration, connection, arm, or freshness loss", () => {
+  const invalidate = [
+    (snapshot) => { snapshot.state.robots[0].tracking = false; },
+    (snapshot) => { snapshot.state.calibration.ok = false; },
+    (snapshot) => { snapshot.status = "closed"; },
+    (snapshot) => { snapshot.state.arm.mode = "reaching"; },
+    (snapshot) => { snapshot.receivedAt -= 3000; },
+  ];
+  for (const change of invalidate) {
+    const { snapshot, commands, executor } = voiceHarness();
+    executor.execute("wave");
+    assert.deepEqual(commands, [{ type: "pose", pose: "wave" }]);
+    change(snapshot);
+    assert.ok(executor.check());
+    assert.equal(commands.at(-1).type, "stop");
+    assert.equal(executor.check(), null);
+    executor.cancel();
+    assert.equal(commands.length, 2);
+  }
+});
+
+test("Speech sessions preserve full utterances, ignore stale end/error events, and recover after errors", () => {
+  const recognizers = [], updates = [], received = [];
+  class Recognition {
+    constructor() { recognizers.push(this); }
+    start() {}
+    abort() { throw new Error("already ended"); }
+  }
+  const session = new SpeechSession(Recognition, (update) => updates.push(update), (text) => received.push(text));
+  session.start();
+  const staleError = recognizers[0].onerror, staleEnd = recognizers[0].onend;
+  session.start();
+  staleError({ error: "not-allowed" });
+  staleEnd();
+  assert.equal(updates.at(-1).listening, true);
+  recognizers[1].onresult({ results: [
+    { 0: { transcript: "forward" }, isFinal: true },
+    { 0: { transcript: "and stop" }, isFinal: true },
+  ] });
+  assert.deepEqual(received, ["forward and stop"]);
+  assert.equal(parseVoiceCommand(received[0]), null);
+  session.start();
+  recognizers[2].onend();
+  assert.match(updates.at(-1).error, /No command/);
+  session.start();
+  recognizers[3].onerror({ error: "audio-capture" });
+  assert.match(updates.at(-1).error, /microphone/);
+  session.cancel();
+});
+
+test("Speech recognition requires a secure context and supports prefixed browsers", (t) => {
+  const prior = globalThis.window;
+  t.after(() => { if (prior === undefined) delete globalThis.window; else globalThis.window = prior; });
+  class Recognition {}
+  globalThis.window = { isSecureContext: true, webkitSpeechRecognition: Recognition };
+  assert.equal(speechRecognition(), Recognition);
+  globalThis.window.isSecureContext = false;
+  assert.equal(speechRecognition(), undefined);
+  globalThis.window = { isSecureContext: true };
+  assert.equal(speechRecognition(), undefined);
+});
+
+test("Disconnected voice movement is rejected rather than replayed after reconnect", async (t) => {
+  const { WebSocketSource } = await import("./src/sources/WebSocketSource.ts");
+  const previous = globalThis.WebSocket;
+  t.after(() => { if (previous === undefined) delete globalThis.WebSocket; else globalThis.WebSocket = previous; });
+  let socket;
+  class Socket {
+    static OPEN = 1;
+    readyState = 0;
+    sent = [];
+    constructor() { socket = this; }
+    send(data) { this.sent.push(JSON.parse(data).data); }
+  }
+  globalThis.WebSocket = Socket;
+  const source = new WebSocketSource("ws://localhost:8080/ws");
+  const acks = [];
+  source.onAck((ack) => acks.push(ack));
+  source.start();
+  source.sendCommand({ id: "voice", type: "forward" }, false);
+  source.sendCommand({ id: "stop", type: "stop" });
+  assert.equal(acks[0].ok, false);
+  socket.readyState = Socket.OPEN;
+  socket.onopen();
+  assert.deepEqual(socket.sent.map((command) => command.id), ["stop"]);
+  source.sendCommand({ id: "live", type: "left" }, false);
+  assert.deepEqual(socket.sent.map((command) => command.id), ["stop", "live"]);
+});
+
+test("Voice executor reports a transport rejection without leaving a stop timer", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { snapshot, commands, executor } = voiceHarness();
+  snapshot.send = (type) => { commands.push({ type }); return false; };
+  assert.match(executor.execute("forward"), /Not sent/);
+  t.mock.timers.tick(1000);
+  assert.deepEqual(commands, [{ type: "forward" }]);
+  assert.equal(executor.check(), null);
+});
+
+const flushCamera = () => new Promise((resolve) => setImmediate(resolve));
+
+function mockCamera(t, fetchFrame) {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const requests = [], revoked = [], created = [];
+  t.mock.method(globalThis, "fetch", (url, options) => {
+    requests.push({ url, options });
+    return fetchFrame ? fetchFrame(url, options) : Promise.resolve(new Response(new Blob(["frame"], { type: "image/jpeg" })));
+  });
+  t.mock.method(URL, "createObjectURL", () => { const url = `blob:frame-${created.length}`; created.push(url); return url; });
+  t.mock.method(URL, "revokeObjectURL", (url) => revoked.push(url));
+  return { requests, revoked, created };
+}
+
+test("Camera snapshots only poll during an active session and release frames on exit", async (t) => {
+  const { startCameraFeed } = await import("./src/state/cameraFeed.ts");
+  const { requests, revoked, created } = mockCamera(t);
+  const frames = [];
+  assert.equal(requests.length, 0);
+  const stop = startCameraFeed("http://localhost:8003/frame.jpg?w=960", (frame) => frames.push(frame));
+  await flushCamera();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].options.cache, "no-store");
+  assert.equal(frames.at(-1).url, "blob:frame-0");
+  t.mock.timers.tick(499);
+  assert.equal(requests.length, 1);
+  t.mock.timers.tick(1);
+  await flushCamera();
+  assert.equal(requests.length, 2);
+  assert.deepEqual(revoked, ["blob:frame-0"]);
+  stop();
+  stop();
+  t.mock.timers.tick(5000);
+  await flushCamera();
+  assert.equal(requests.length, 2);
+  assert.deepEqual(revoked, created);
+});
+
+test("Leaving Camera aborts in-flight work and ignores late frames", async (t) => {
+  const { startCameraFeed } = await import("./src/state/cameraFeed.ts");
+  let resolve;
+  const { requests, created } = mockCamera(t, () => new Promise((done) => { resolve = done; }));
+  const frames = [];
+  const stop = startCameraFeed("http://localhost:8003/frame.jpg", (frame) => frames.push(frame));
+  t.mock.timers.tick(2000);
+  assert.equal(requests.length, 1);
+  stop();
+  assert.equal(requests[0].options.signal.aborted, true);
+  resolve(new Response(new Blob(["late"], { type: "image/jpeg" })));
+  await flushCamera();
+  t.mock.timers.tick(5000);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(frames, []);
+  assert.deepEqual(created, []);
+});
+
+test("Camera failures stop polling until the user retries", async (t) => {
+  const { startCameraFeed } = await import("./src/state/cameraFeed.ts");
+  const { requests } = mockCamera(t, () => Promise.resolve(new Response("unavailable", { status: 503 })));
+  const frames = [];
+  const stop = startCameraFeed("http://localhost:8003/frame.jpg", (frame) => frames.push(frame));
+  await flushCamera();
+  assert.match(frames.at(-1).error, /503/);
+  assert.equal(requests[0].options.signal.aborted, true);
+  t.mock.timers.tick(10000);
+  assert.equal(requests.length, 1);
+  stop();
+});
+
+test("Camera requests time out and reject non-image responses", async (t) => {
+  const { startCameraFeed } = await import("./src/state/cameraFeed.ts");
+  const { requests } = mockCamera(t, (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+  }));
+  const frames = [];
+  const stop = startCameraFeed("http://localhost:8003/frame.jpg", (frame) => frames.push(frame));
+  t.mock.timers.tick(5000);
+  await flushCamera();
+  assert.equal(requests[0].options.signal.aborted, true);
+  assert.match(frames.at(-1).error, /timed out/i);
+  stop();
+  t.mock.method(globalThis, "fetch", () => Promise.resolve(new Response("not an image", { headers: { "Content-Type": "text/html" } })));
+  const stopInvalid = startCameraFeed("http://localhost:8003/frame.jpg", (frame) => frames.push(frame));
+  await flushCamera();
+  assert.match(frames.at(-1).error, /snapshot/i);
+  stopInvalid();
+});
+
+test("Camera URL validation supports local endpoints and blocks invalid or mixed-content URLs", async () => {
+  const { cameraSnapshotUrl, DEFAULT_CAMERA_URL } = await import("./src/state/cameraFeed.ts");
+  assert.equal(DEFAULT_CAMERA_URL, "http://qnxpi78.local:8003/frame.jpg?w=960");
+  assert.equal(cameraSnapshotUrl(" /frame.jpg?w=960 ", "http://localhost:5173"), "http://localhost:5173/frame.jpg?w=960");
+  assert.equal(cameraSnapshotUrl(DEFAULT_CAMERA_URL, "http://localhost:5173"), DEFAULT_CAMERA_URL);
+  for (const url of ["", "javascript:alert(1)", "file:///tmp/frame.jpg", "http://["]) {
+    assert.throws(() => cameraSnapshotUrl(url, "http://localhost:5173"));
+  }
+  assert.throws(() => cameraSnapshotUrl(DEFAULT_CAMERA_URL, "https://localhost:5173"), /HTTP|HTTPS/);
+});
+
+function mockRecording(t, getUserMedia) {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const oldNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const oldRecorder = globalThis.MediaRecorder;
+  t.after(() => {
+    if (oldNavigator) Object.defineProperty(globalThis, "navigator", oldNavigator); else delete globalThis.navigator;
+    if (oldRecorder === undefined) delete globalThis.MediaRecorder; else globalThis.MediaRecorder = oldRecorder;
+  });
+  let stops = 0;
+  const stream = { getTracks: () => [{ stop: () => stops++ }] };
+  const instances = [];
+  class Recorder {
+    static isTypeSupported(type) { return type.startsWith("audio/webm"); }
+    state = "inactive";
+    mimeType = "audio/webm";
+    constructor() { instances.push(this); }
+    start() { this.state = "recording"; }
+    stop() {
+      this.state = "inactive";
+      this.ondataavailable?.({ data: new Blob(["recorded audio"], { type: this.mimeType }) });
+      this.onstop?.();
+    }
+  }
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { mediaDevices: { getUserMedia: getUserMedia ?? (async () => stream) } } });
+  globalThis.MediaRecorder = Recorder;
+  return { stream, instances, stops: () => stops };
+}
+
+test("Voice mic records once, stops tracks and auto-finishes within eight seconds", async (t) => {
+  const { VoiceRecording } = await import("./src/state/voiceRecording.ts");
+  const mock = mockRecording(t), received = [], phases = [];
+  const recording = new VoiceRecording((phase) => phases.push(phase), (audio) => received.push(audio));
+  await recording.start();
+  assert.equal(phases.at(-1), "recording");
+  t.mock.timers.tick(8000);
+  assert.equal(received.length, 1);
+  assert.equal(received[0].type, "audio/webm");
+  assert.equal(mock.stops(), 1);
+  recording.cancel();
+  t.mock.timers.tick(10000);
+  assert.equal(received.length, 1);
+});
+
+test("Cancelled microphone permission and late recorder events never submit audio", async (t) => {
+  const { VoiceRecording } = await import("./src/state/voiceRecording.ts");
+  let grant;
+  const mock = mockRecording(t, () => new Promise((resolve) => { grant = resolve; }));
+  const recording = new VoiceRecording(() => {}, () => assert.fail("cancelled audio must not submit"));
+  const pending = recording.start();
+  recording.cancel();
+  grant(mock.stream);
+  await pending;
+  assert.equal(mock.stops(), 1);
+  assert.equal(mock.instances.length, 0);
+  const next = recording.start();
+  grant(mock.stream);
+  await next;
+  const stale = mock.instances[0].onstop;
+  recording.cancel();
+  stale();
+  assert.equal(mock.stops(), 2);
+});
+
+test("Voice recording reports denied permission without uploading", async (t) => {
+  const { VoiceRecording } = await import("./src/state/voiceRecording.ts");
+  mockRecording(t, async () => { throw new DOMException("denied", "NotAllowedError"); });
+  const updates = [];
+  const recording = new VoiceRecording((phase, error) => updates.push({ phase, error }), () => assert.fail("must not upload"));
+  await recording.start();
+  assert.match(updates.at(-1).error, /Allow microphone/);
+  assert.equal(updates.at(-1).phase, "idle");
+});
+
+test("Groq response validation rejects unbounded movement and invented command fields", async () => {
+  const { validateVoiceIntent, voiceEndpoint } = await import("./src/state/voiceApi.ts");
+  assert.equal(voiceEndpoint("wss://localhost:8080/ws?token=unused"), "https://localhost:8080/voice");
+  assert.throws(() => voiceEndpoint("https://localhost"));
+  assert.deepEqual(validateVoiceIntent({ type: "forward", durationMs: 500 }), { type: "forward", durationMs: 500 });
+  for (const intent of [{ type: "forward", durationMs: 60000 }, { type: "goto", target: { x: 1, y: 2 } }, { type: "pose", pose: "unsupported" }, { type: "stop", robotId: "other" }, [], null]) {
+    assert.equal(validateVoiceIntent(intent), null);
+  }
+});
+
+test("Groq uploads audio and only minimal mock scene data, then revalidates replies", async (t) => {
+  const { requestVoice } = await import("./src/state/voiceApi.ts");
+  const { snapshot } = voiceHarness();
+  snapshot.state.cameraFeedUrl = "http://localhost:8003/frame.jpg";
+  let upload;
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    upload = options;
+    return new Response(JSON.stringify({ transcript: "give me a wave", plan: [{ type: "pose", pose: "wave" }] }));
+  });
+  const controller = new AbortController();
+  const result = await requestVoice(new Blob(["audio"], { type: "audio/webm" }), snapshot, "ws://localhost:8080/ws", "mock", controller.signal);
+  assert.deepEqual(result.plan, [{ type: "pose", pose: "wave" }]);
+  assert.equal(upload.signal, controller.signal);
+  assert.equal(upload.body.get("source"), "mock");
+  assert.ok(!upload.body.get("scene").includes("cameraFeedUrl"));
+  assert.equal(upload.headers, undefined);
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ transcript: "move", plan: [{ type: "forward", durationMs: 10000 }] })));
+  await assert.rejects(requestVoice(new Blob(["audio"]), snapshot, "ws://localhost:8080/ws", "ws", controller.signal), /Unsupported/);
+});
+
+test("Groq destinations must still exist and tracking must be fresh at execution", () => {
+  const { snapshot, executor, commands } = voiceHarness();
+  snapshot.landmarks = [];
+  assert.match(executor.executeIntent({ type: "goto", name: "missing" }), /Not sent/);
+  snapshot.receivedAt -= 3000;
+  assert.match(executor.executeIntent({ type: "forward", durationMs: 500 }), /fresh/);
+  assert.deepEqual(commands, []);
+});
+
+test("Voice mic automatically submits after speech followed by silence", async (t) => {
+  const { VoiceRecording } = await import("./src/state/voiceRecording.ts");
+  const mock = mockRecording(t), received = [];
+  const prior = globalThis.AudioContext;
+  t.after(() => { if (prior === undefined) delete globalThis.AudioContext; else globalThis.AudioContext = prior; });
+  let now = 0, level = 0.1, closed = 0;
+  t.mock.method(Date, "now", () => now);
+  globalThis.AudioContext = class {
+    resume() { return Promise.resolve(); }
+    close() { closed++; return Promise.resolve(); }
+    createMediaStreamSource() { return { connect() {} }; }
+    createAnalyser() { return { fftSize: 512, getFloatTimeDomainData(samples) { samples.fill(level); } }; }
+  };
+  const recording = new VoiceRecording(() => {}, (audio) => received.push(audio));
+  await recording.start();
+  now = 100; t.mock.timers.tick(100);
+  now = 200; t.mock.timers.tick(100);
+  level = 0;
+  now = 1100; t.mock.timers.tick(900);
+  assert.equal(received.length, 0);
+  now = 1200; t.mock.timers.tick(100);
+  assert.equal(received.length, 1);
+  assert.equal(mock.stops(), 1);
+  assert.equal(closed, 1);
+});
+
+test("Voice grammar and resolver support going past an obstacle", () => {
+  assert.deepEqual(parseVoiceCommand("go past the blue barrier"), { type: "goto", name: "blue barrier", relation: "past" });
+  const state = voiceWorld();
+  const robot = state.robots[0];
+  state.obstacles = [{ id: "barrier", source: "manual", shape: "circle", x: robot.x + 0.15, y: robot.y, yaw: 0, radius: 0.03 }];
+  state.arena.width = state.arena.length = 1;
+  Object.assign(robot, { x: 0.3, y: 0.5 });
+  state.obstacles[0].x = 0.5; state.obstacles[0].y = 0.5;
+  const past = resolveVoiceTarget("barrier", [], state, robot.id, "past").target;
+  const beside = resolveVoiceTarget("barrier", [], state, robot.id, "at").target;
+  assert.ok(past.x > 0.5, "past target is on the far side");
+  assert.ok(beside.x < 0.5, "beside target is on the near side");
+});
+
+test("Arm-assisted navigation keeps a voice goto alive but still aborts other actions", () => {
+  const { snapshot, commands, executor } = voiceHarness();
+  const id = snapshot.robotId;
+  assert.equal(voiceReadiness(snapshot.state, id, "live", 1000, 1000, true), null);
+  snapshot.state.arm.mode = "carrying";
+  snapshot.state.arm.targetRobotId = id;
+  assert.equal(voiceReadiness(snapshot.state, id, "live", 1000, 1000, true), null);
+  assert.ok(voiceReadiness(snapshot.state, id, "live", 1000, 1000, false));
+  snapshot.state.arm.targetRobotId = "someone-else";
+  assert.ok(voiceReadiness(snapshot.state, id, "live", 1000, 1000, true));
+  snapshot.state.arm.mode = "idle";
+  snapshot.state.arm.targetRobotId = undefined;
+  executor.execute("go to home");
+  snapshot.state.arm.mode = "lifting";
+  snapshot.state.arm.targetRobotId = id;
+  assert.equal(executor.check(), null);
+  assert.equal(commands.at(-1).type, "goto");
+});
+
+test("Voice plans advance step by step, abort on failure and honour stop", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { snapshot, commands, executor } = voiceHarness();
+  const messages = [];
+  const runner = new VoiceExecutor(() => ({ ...snapshot }), (message, error) => messages.push({ message, error }));
+  const robot = snapshot.state.robots[0];
+  const plan = [{ type: "goto", name: "home" }, { type: "pose", pose: "wave" }, { type: "forward", durationMs: 500 }];
+  const tick = (ms) => { t.mock.timers.tick(ms); snapshot.receivedAt = Date.now(); };
+  snapshot.receivedAt = Date.now();
+  assert.match(runner.executePlan(plan), /step 1 of 3/);
+  assert.deepEqual(commands.map((c) => c.type), ["goto"]);
+  tick(1000);
+  assert.equal(runner.check(), null);
+  assert.deepEqual(commands.map((c) => c.type), ["goto"], "waits until the robot arrives");
+  Object.assign(robot, { x: 0.3, y: 0.3 });
+  assert.equal(runner.check(), null);
+  assert.equal(commands.at(-1).type, "pose");
+  assert.match(messages.at(-1).message, /step 2 of 3/);
+  tick(1000);
+  assert.equal(runner.check(), null);
+  assert.equal(commands.at(-1).type, "forward");
+  tick(500);
+  assert.equal(runner.check(), null);
+  assert.match(messages.at(-1).message, /Finished all 3/);
+  assert.equal(runner.check(), null);
+
+  const before = commands.length;
+  runner.executePlan(plan);
+  runner.executePlan([{ type: "stop" }]);
+  tick(60000);
+  assert.equal(runner.check(), null);
+  assert.deepEqual(commands.slice(before).map((c) => c.type), ["goto", "stop"]);
+
+  runner.executePlan(plan);
+  tick(30000);
+  assert.match(runner.check(), /did not reach home/);
+  assert.match(runner.executePlan([{ type: "goto", name: "missing" }, { type: "forward", durationMs: 500 }]), /Not sent: step 1: .*Unknown/);
 });

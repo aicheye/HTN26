@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node bridge.mjs",
-    "test": "node planner.test.mjs && node navigator.test.mjs && node gait.test.mjs && node pose-filter.test.mjs && node test.mjs",
+    "start": "node --env-file-if-exists=.env bridge.mjs",
+    "test": "node planner.test.mjs && node navigator.test.mjs && node gait.test.mjs && node pose-filter.test.mjs && node --test voice.test.mjs && node test.mjs",
     "sim": "node sim.mjs"
   },
   "dependencies": {

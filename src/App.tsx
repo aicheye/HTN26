@@ -4,8 +4,11 @@ import { MockSceneControls } from "./components/MockSceneControls";
 import { MapView, type Renderer } from "./components/MapView";
 import { CommandLog, Telemetry } from "./components/StatusPanel";
 import { useWorld } from "./state/StateProvider";
+import { VoiceControls } from "./components/VoiceControls";
+import { CameraFeed } from "./components/CameraFeed";
+import { DEFAULT_CAMERA_URL } from "./state/cameraFeed";
 
-type Section = "controls" | "telemetry" | "log" | "raw" | "settings";
+type Section = "controls" | "camera" | "telemetry" | "log" | "raw" | "settings";
 
 export default function App() {
   const {
@@ -19,11 +22,17 @@ export default function App() {
     speed,
     setSpeed,
     send,
+    cancelVoice,
   } = useWorld();
   const [mainView, setMainView] = useState<Renderer>("3d");
-  const [showCamera, setShowCamera] = useState(false);
+  const [cameraUrl, setCameraUrl] = useState<string | null>(null);
+  const feedUrl = cameraUrl ?? state?.cameraFeedUrl ?? DEFAULT_CAMERA_URL;
   const [showDebug, setShowDebug] = useState(false);
   const [section, setSection] = useState<Section | null>("controls");
+  const changeSection = (next: Section | null) => {
+    cancelVoice();
+    setSection(next);
+  };
   const pipView: Renderer = mainView === "3d" ? "2d" : "3d";
   const visible = SECTIONS.filter((s) => s.id !== "raw" || showDebug);
 
@@ -37,7 +46,7 @@ export default function App() {
             title={s.label}
             aria-label={s.label}
             aria-pressed={section === s.id}
-            onClick={() => setSection((cur) => (cur === s.id ? null : s.id))}
+            onClick={() => changeSection(section === s.id ? null : s.id)}
             className={`flex h-9 w-9 items-center justify-center rounded-lg transition ${
               s.id === "settings" ? "mt-auto" : ""
             } ${
@@ -63,7 +72,7 @@ export default function App() {
             </h2>
             <button
               type="button"
-              onClick={() => setSection(null)}
+              onClick={() => changeSection(null)}
               aria-label="Collapse panel"
               className="rounded p-1 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
             >
@@ -79,7 +88,32 @@ export default function App() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto p-4">
-            {section === "controls" && <><ControlPad /><MockSceneControls /></>}
+            {section === "controls" && <>
+              <ControlPad />
+              <VoiceControls />
+              <MockSceneControls />
+            </>}
+            {section === "camera" && (
+              <div className="space-y-4 text-xs text-zinc-400">
+                <p>The camera loads only while this tab is open. Leaving it or hiding the browser tab stops requests immediately.</p>
+                <form className="space-y-2" onSubmit={(event) => {
+                  event.preventDefault();
+                  setCameraUrl(String(new FormData(event.currentTarget).get("cameraUrl") ?? "").trim());
+                }}>
+                  <label className="block font-medium">
+                    Snapshot URL
+                    <input key={feedUrl} name="cameraUrl" type="text" inputMode="url" defaultValue={feedUrl}
+                      className="mt-1 w-full rounded border border-zinc-700 bg-zinc-800 px-2 py-1.5 font-mono text-xs text-zinc-200" />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="submit" className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-zinc-200 hover:bg-zinc-700">Apply URL</button>
+                    <button type="button" onClick={() => setCameraUrl(null)} className="rounded px-2 py-1.5 hover:bg-zinc-800 hover:text-zinc-200">Use default</button>
+                  </div>
+                </form>
+                <p>Uses the scene’s camera URL when available, otherwise the Pi’s documented JPEG endpoint. Connect to the Sesame-Controller WiFi to reach the Pi.</p>
+                <p>Snapshots update at up to 2 fps, with only one request at a time to limit camera load. This preview is independent of the map and robot controls.</p>
+              </div>
+            )}
             {section === "telemetry" && <Telemetry />}
             {section === "log" && <CommandLog />}
             {section === "raw" && (
@@ -138,11 +172,6 @@ export default function App() {
                 </label>
                 <div className="space-y-2 border-t border-zinc-800 pt-3">
                   <Check
-                    label="Camera feed layer"
-                    checked={showCamera}
-                    onChange={setShowCamera}
-                  />
-                  <Check
                     label="Raw JSON state"
                     checked={showDebug}
                     onChange={setShowDebug}
@@ -158,14 +187,13 @@ export default function App() {
       </aside>
 
       <section className="relative min-w-0 flex-1 overflow-hidden bg-zinc-950">
-        {state ? (
+        {section === "camera" ? <CameraFeed url={feedUrl} /> : state ? (
           <>
             <MapView
               renderer={mainView}
               state={state}
               selectedRobotId={selectedRobotId}
-              showCameraLayer={showCamera}
-              onPickGoal={(p) => send("goto", { target: p })}
+              onPickGoal={(point) => send("goto", { target: point })}
             />
 
             <div className="absolute right-3 top-3 h-40 w-56 overflow-hidden rounded-lg bg-zinc-900 shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
@@ -174,7 +202,6 @@ export default function App() {
                   renderer={pipView}
                   state={state}
                   selectedRobotId={selectedRobotId}
-                  showCameraLayer={showCamera}
                   compact
                 />
               </div>
@@ -205,6 +232,7 @@ export default function App() {
 
 const SECTIONS: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: "controls", label: "Controls", icon: <ControlsIcon /> },
+  { id: "camera", label: "Camera", icon: <CameraIcon /> },
   { id: "telemetry", label: "Telemetry", icon: <TelemetryIcon /> },
   { id: "log", label: "Command log", icon: <LogIcon /> },
   { id: "raw", label: "Raw state", icon: <CodeIcon /> },
@@ -223,6 +251,17 @@ function ControlsIcon() {
       >
         <rect x="2.5" y="5.5" width="15" height="9" rx="2" />
         <path d="M5.5 8.5h.01M8.5 8.5h.01M11.5 8.5h.01M14.5 8.5h.01M6.5 11.5h7" />
+      </g>
+    </svg>
+  );
+}
+
+function CameraIcon() {
+  return (
+    <svg viewBox="0 0 20 20" className="h-4.5 w-4.5" aria-hidden>
+      <g fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3.5 5.5h3l1-2h5l1 2h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z" />
+        <circle cx="10" cy="10.5" r="3" />
       </g>
     </svg>
   );
