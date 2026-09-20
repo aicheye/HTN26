@@ -368,7 +368,10 @@ def main():
         except Exception as e:                      # a refused or failed move mid-way: still go back to zero
             print(f"  MOVE STOPPED: {type(e).__name__}: {str(e)[:200]}")
             print("  returning to zero")
-            arm.slew(READY, GRIPPER_OPEN_AUTO)
+            try:
+                arm.slew(READY, GRIPPER_OPEN_AUTO)
+            except Exception as e2:
+                print(f"  could not return to zero either: {str(e2)[:120]}. Move the arm by hand to a free pose and press z.")
             return False
         print("  back to zero")
         arm.slew(READY, traj[-1][2])
@@ -438,7 +441,10 @@ def main():
             elif key == "p":
                 run(True)
             elif key == "z":
-                arm.slew(READY, 40.0); print("\n  ready pose")
+                try:
+                    arm.slew(READY, 40.0); print("\n  ready pose")
+                except Exception as e:
+                    print(f"\n  cannot reach zero from here: {str(e)[:120]}")
             elif key == "o":
                 q = arm.read(); arm.send({j: q[j] for j in JOINTS}, 40.0); print("\n  gripper opened")
             elif key == "q":

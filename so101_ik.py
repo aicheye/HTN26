@@ -58,7 +58,9 @@ LIMITS = SAFE_LIMITS
 # around those points, so this is the crash margin. The gripper frame is the fingertips and may come down
 # to the table, which is TABLE_Z below base_link's origin (the base plate): with the arm resting on the
 # table in its folded pose the fingertips read z = -1.8 cm (hand-guided demo, 2026-09-19).
-MIN_LINK_Z = {"elbow_flex": 0.04, "wrist_flex": 0.04, "wrist_roll": 0.04, "gripper_frame": -0.02}
+# The gripper frame floor is 3.5 cm below base_link: in the folded rest pose the fingertips rest on the table and
+# read -1.8 to -2.4 cm (seen 2026-09-19/20), and a move out of rest must not be refused at its first step.
+MIN_LINK_Z = {"elbow_flex": 0.04, "wrist_flex": 0.04, "wrist_roll": 0.04, "gripper_frame": -0.035}
 UNSAFE_MSG = "Refusing to command it: driving the arm past this position risks breaking the robot."
 
 
