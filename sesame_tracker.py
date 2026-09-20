@@ -202,9 +202,17 @@ def alive_units(tracker):
 _page_server = None
 
 
-def open_camera_page(host=None, unit=3):
-    """Pop up Sean's live camera page (pi/client/demo.html) for one camera in the browser. Serves pi/client on
-    localhost:5500 once. Does nothing if pi/client is not in this checkout."""
+def _port_open(port):
+    import socket
+    with socket.socket() as sk:
+        sk.settimeout(0.3)
+        return sk.connect_ex(("127.0.0.1", port)) == 0
+
+
+def open_camera_page(host=None, unit=3, units=None):
+    """Pop up Sean's live camera page (pi/client/demo.html) in the browser, one tab per camera. Serves
+    pi/client on localhost:5500 (reusing a server already there). Prints the URLs, so they can be opened by
+    hand if the browser does not come up. Does nothing if pi/client is not in this checkout."""
     global _page_server
     import subprocess
     import webbrowser
@@ -212,13 +220,25 @@ def open_camera_page(host=None, unit=3):
     if not os.path.isfile(os.path.join(client, "demo.html")):
         print("   (Sean's camera page is not in this checkout: pi/client missing)")
         return False
-    if _page_server is None:
+    if not _port_open(5500):
         _page_server = subprocess.Popen([sys.executable, "-m", "http.server", "5500", "--bind", "127.0.0.1"], cwd=client,
-                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(0.5)
-    url = f"http://localhost:5500/demo.html?host={host or default_host()}&unit={unit}"
-    print(f"   camera view: {url}")
-    webbrowser.open(url)
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        for _ in range(20):
+            if _port_open(5500):
+                break
+            time.sleep(0.1)
+    host = host or default_host()
+    for u in (units or [unit]):
+        url = f"http://localhost:5500/demo.html?host={host}&unit={u}"
+        print(f"   camera view: {url}")
+        opened = False
+        if sys.platform == "darwin":
+            opened = subprocess.run(["open", url], capture_output=True).returncode == 0
+        if not opened:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                print("   (could not open a browser: open the link above by hand)")
     return True
 
 

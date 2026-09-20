@@ -82,8 +82,8 @@ def main():
         if not up:
             print("no tracker answered in 4 minutes. Check pi/trackers-live.log and the WiFi."); return 1
     # the camera page first, always: orient the camera so all four corner tags and the Sesame's tag are in view
-    print(f"camera view for camera {up[0]} (cameras up: {up}). Orient the camera: 4 corner tags in view, then the Sesame.")
-    open_camera_page(tracker.host, up[0])
+    print(f"camera view (cameras up: {up}). Orient the camera: 4 corner tags in view, then the Sesame.")
+    open_camera_page(tracker.host, units=up)
     print(f"1. trackers at {tracker.host}: ", end="", flush=True)
     if sesame_seen(tracker):
         print(f"a camera sees the Sesame (cameras up: {up})")
@@ -95,6 +95,8 @@ def main():
                 print(f"   a camera sees the Sesame after {(i + 1) / 2:.0f} s"); break
             if i % 20 == 19:
                 print(f"   still waiting ({(i + 1) // 2} s). In the page: are the corner tags learned (camera height shown)? Is tag 0 on the Sesame in view?")
+            if i == 59:                                     # half a minute without the Sesame: bring the page up again
+                open_camera_page(tracker.host, units=up)
         else:
             print("   no camera reported the Sesame in 120 s. Fix what the page shows, then run this again."); return 1
 
