@@ -45,7 +45,7 @@ export default function App() {
   return (
     <div className="relative flex h-full">
       <TitleScreen onStart={() => setStarted(true)} />
-      <nav className="relative z-10 flex w-12 shrink-0 flex-col items-center gap-1 border-r border-zinc-800 bg-zinc-950 py-2">
+      <nav className="relative z-20 flex w-12 shrink-0 flex-col items-center gap-1 border-r border-zinc-800 bg-zinc-950 py-2">
         {visible.map((s) => (
           <button
             key={s.id}
@@ -70,7 +70,7 @@ export default function App() {
       {/* Overlays the map rather than resizing it, so the canvas never has to change size. */}
       <aside
         aria-hidden={!section}
-        className={`absolute bottom-0 left-12 top-0 z-10 w-64 border-r border-zinc-800 bg-zinc-900 transition-[transform,visibility] duration-200 ${
+        className={`absolute bottom-0 left-12 top-0 z-10 w-64 border-r border-zinc-800 bg-zinc-900 shadow-[8px_0_24px_-6px_rgba(0,0,0,0.55)] transition-[translate,visibility] duration-300 ease-out ${
           section ? "visible translate-x-0" : "invisible -translate-x-full"
         }`}
       >
