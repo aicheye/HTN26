@@ -23,16 +23,19 @@ from sesame_tracker import Tracker, ensure_trackers, open_camera_page
 from so101_ik import JOINTS, ik, fk
 from so101_safe import default_port
 
-OPEN, CLOSED = 20.0, 0.0
+OPEN_DEFAULT, CLOSED = 60.0, 0.0     # open well wider than the body so the jaws land around the two lips even a cm or two off
 PITCHES = [-90, -85, -80, -75, -70, -65, -60, -55, -50, -45, -40]
 
 
 def solve(x_cm, y_cm, z_cm, jaw):
-    """Joints for the target, straight down if possible. Returns (joints, pitch) or (None, None)."""
+    """Joints for the target, straight down if possible. The lips are a symmetric pair, so the wrist may take
+    the jaw axis or the jaw axis + 180: the exact direction first, the flipped one when that is out of reach.
+    Returns (joints, pitch) or (None, None)."""
     for pitch in PITCHES:
-        q = ik(x_cm / 100, y_cm / 100, z_cm / 100, jaw, pitch, exact_jaw=True)
-        if q is not None:
-            return q, pitch
+        for exact in (True, False):
+            q = ik(x_cm / 100, y_cm / 100, z_cm / 100, jaw, pitch, exact_jaw=exact)
+            if q is not None:
+                return q, pitch
     return None, None
 
 
@@ -47,7 +50,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tracker"); ap.add_argument("--port", default=default_port())
     ap.add_argument("--grip-z", type=float, default=9.0, help="cm above the arm's base where the jaws close (demo: 9.0)")
-    ap.add_argument("--jaw-angle", type=float, default=0.0, help="wrist roll relative to the tag: 0 = the jaw axis points the way the tag's top edge points (matches the tag's orientation); 90 or -90 = across it, jaws swapped; 180 = along it, jaws swapped")
+    ap.add_argument("--jaw-angle", type=float, default=90.0, help="jaw axis relative to the tag's top edge: 90 = across the tag (the lips are at its left and right edges); 0 if the tag is stuck rotated 90 deg on the body")
+    ap.add_argument("--open", type=float, default=OPEN_DEFAULT, help="gripper opening before the grip (0 closed .. 100 fully open)")
     ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[0.0, 0.0], help="the arm's base relative to its tag (cm)")
     ap.add_argument("--hover", type=float, default=5.0); ap.add_argument("--lift", type=float, default=5.0)
     ap.add_argument("--dry-run", action="store_true")
@@ -89,20 +93,21 @@ def main():
     print(f"4. IK: grip pitch {pitch} deg" + (" (straight down)" if pitch == -90 else " (tilted to reach)") + f", hover pitch {p_hover}, lift pitch {p_lift}")
     print(f"   joints at the grip: " + "  ".join(f"{j.split('_')[0]}={q_grip[j]:.1f}" for j in JOINTS))
     got = (f["jaw_yaw"] - tag_rel + 180) % 360 - 180
+    ok = min(abs(got - args.jaw_angle), abs((got - args.jaw_angle + 180) % 360 - 180)) < 0.5   # +-180 is the same jaw axis
     print(f"   check, FK of those joints: x={100*f['x']:.1f} y={100*f['y']:.1f} z={100*f['z']:.1f} cm, jaw axis {f['jaw_yaw']:+.1f} deg = tag {got:+.1f} deg"
-          + ("  MATCH" if abs(got - args.jaw_angle) < 0.5 else "  MISMATCH"))
+          + ("  MATCH" if ok else "  MISMATCH") + f"; jaws open to {args.open:.0f} before the grip")
     if args.dry_run:
         return 0
 
     arm = Arm(args.port)
     try:
         print("5. moving: rest -> hover")
-        arm.slew(READY, OPEN); arm.slew(q_hover, OPEN); time.sleep(0.3)
+        arm.slew(READY, args.open); arm.slew(q_hover, args.open); time.sleep(0.3)
         print("   down to the target")
-        for q, g in line(q_hover, q_grip, 2.0, OPEN):
+        for q, g in line(q_hover, q_grip, 2.0, args.open):
             arm.send(q, g); time.sleep(1 / FPS)
         print("   closing")
-        for q, g in line(q_grip, q_grip, 1.0, OPEN, CLOSED):
+        for q, g in line(q_grip, q_grip, 1.0, args.open, CLOSED):
             arm.send(q, g); time.sleep(1 / FPS)
         time.sleep(0.5)
         print("   lift")
