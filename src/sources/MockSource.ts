@@ -26,6 +26,7 @@ import { EDGE_MARGIN_M } from "../../bridge/planner.mjs";
 const TICK_MS = 50; // ~20 Hz
 const LINEAR_SPEED = 0.45; // m/s at speed = 1
 const ANGULAR_SPEED = 1.6; // rad/s at speed = 1
+const STEER_CURVE_RAD_PER_M = 2.5;
 const POSE_DURATION_MS = 2_500; // one-shot animations block movement while playing
 
 /** How long the robot has to be blocked by a too-tall obstacle before the arm helps. */
@@ -88,6 +89,7 @@ export class MockSource implements StateSource {
   // goto is the bridge's navigator. It sends walking commands, which land in navDrive and move the mock robot. It
   // runs on the mock's own clock, which advances with the ticks, so that tests with a fake clock work.
   private navDrive = "";
+  private navSteer = 0;
   private navClockMs = 0;
   private navigator = this.makeNavigator();
 
@@ -102,7 +104,7 @@ export class MockSource implements StateSource {
   }
 
   private makeNavigator() {
-    const navigator = new Navigator((command) => { this.navDrive = command === "stop" ? "" : command; });
+    const navigator = new Navigator((command, steer) => { this.navDrive = command === "stop" ? "" : command; this.navSteer = steer; });
     // An arm request from the navigator: the first drop point that the arm's kinematics can serve is used.
     navigator.requestCarry = (_goal, drops) => drops.some((drop) => this.beginCarry(drop) === null);
     return navigator;
@@ -347,7 +349,10 @@ export class MockSource implements StateSource {
       return "turning";
     }
     if (this.navDrive === "forward" || this.navDrive === "backward") {
-      this.advance((this.navDrive === "forward" ? 1 : -1) * LINEAR_SPEED * speed * dt);
+      const distance = (this.navDrive === "forward" ? 1 : -1) * LINEAR_SPEED * speed * dt;
+      // Full steer curves the mock's walk with a 0.4 m radius. The real robot's value has not been measured.
+      if (this.navDrive === "forward") this.truth.yaw = wrapAngle(this.truth.yaw + this.navSteer * STEER_CURVE_RAD_PER_M * distance);
+      this.advance(distance);
       return "moving";
     }
     return "idle";
@@ -488,9 +493,15 @@ export class MockSource implements StateSource {
         ...route.map((p) => ({ x: p.x + offset.x, y: p.y + offset.y, z: offset.z + clearance, opening: 0 })),
         { ...to, z: offset.z, opening: 0 }, { ...to, z: offset.z, opening: 1 }, { ...to, z: offset.z + 0.035, opening: 1 }];
       return waypoints.every((target) => {
-        seed = solveArmIK(arm.mount, target, target.z, seed, { yaw: this.gripYaw, opening: target.opening });
+        // Clamped to the joint limits exactly as the running sequence clamps them. Unclamped, a drop point that
+        // needs a joint past its limit passed this check and then failed mid-carry.
+        const ik = solveArmIK(arm.mount, target, target.z, seed, { yaw: this.gripYaw, opening: target.opening });
+        seed = { waist: clampArmJoint("waist", ik.waist), shoulder: clampArmJoint("shoulder", ik.shoulder), elbow: clampArmJoint("elbow", ik.elbow),
+          wristPitch: clampArmJoint("wristPitch", ik.wristPitch), wristRoll: clampArmJoint("wristRoll", ik.wristRoll), gripper: clampArmJoint("gripper", ik.gripper) };
         const reached = armTipPosition(arm.mount, seed);
-        return Math.hypot(reached.x - target.x, reached.y - target.y, reached.z - target.z) < 0.002;
+        // Stricter than the 1.5 mm the running sequence demands of each phase. At 2 mm, a drop point could pass
+        // here and then fail mid-carry, which depended on the heading Sesame happened to arrive with.
+        return Math.hypot(reached.x - target.x, reached.y - target.y, reached.z - target.z) < 0.001;
       });
     });
     if (!handle) return "Handle pickup or clearance path is outside the URDF joint limits. Move the obstacle closer.";

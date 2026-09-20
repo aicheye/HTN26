@@ -126,9 +126,10 @@ export function costmap(arena, obstacles, robotRadius = ROBOT_RADIUS_M) {
 // Where an arm can set the robot down so that it can walk to the goal, for when no path exists from where it
 // stands. Returns up to `count` points, best first, or [] when there is none: free cells that are connected to the
 // goal, at least CARRY_SLACK_M clear of every limit so that a drop that is a little off still lands on free floor,
-// and within `reach` of the arm's base. The nearest to the arm come first, because those are the ones its
-// kinematics most likely reach. Whether the arm really reaches a point is for the arm's own planner to say.
+// and within `reach` of the arm's base. The ones at 0.8 of its reach come first, because those are the ones
+// its kinematics most likely serve. Whether the arm really reaches a point is for the arm's own planner to say.
 export const CARRY_SLACK_M = 0.03;
+const PREFERRED_REACH = 0.8;
 
 // Every free cell that can be walked to from `fromCell`, in no particular order.
 function connected(grid, fromCell) {
@@ -152,7 +153,10 @@ export function carryTargets(goal, arena, obstacles, armBase, reach, robotRadius
     const p = grid.centre(cell), distance = Math.hypot(p.x - armBase.x, p.y - armBase.y);
     if (grid.slackOf[cell] >= CARRY_SLACK_M && distance <= reach) found.push({ ...p, distance });
   }
-  found.sort((a, b) => a.distance - b.distance);
+  // Best first: the points nearest to 0.8 of the reach. For a point close to its base an arm folds up tight, and
+  // at carrying height that runs into joint limits: the mock arm could not hold the robot up 0.17 m from its
+  // mount, and did at 0.25 m. The very end of the reach is no better, so the search aims a little short of it.
+  found.sort((a, b) => Math.abs(a.distance - PREFERRED_REACH * reach) - Math.abs(b.distance - PREFERRED_REACH * reach));
   // Spread the choices out: candidates 2 cm apart would all fail for the same reason.
   const chosen = [];
   for (const p of found) {

@@ -111,7 +111,8 @@ for (const drop of drops) {
   assert.ok(Math.hypot(drop.x - armBase.x, drop.y - armBase.y) <= 0.3, "within the arm's reach");
   assert.ok(planPath(drop, target, arena, [barrier]), "the goal can be walked to from the drop point");
 }
-assert.ok(Math.hypot(drops[0].x - armBase.x, drops[0].y - armBase.y) <= Math.hypot(drops.at(-1).x - armBase.x, drops.at(-1).y - armBase.y), "nearest to the arm first");
+const fromPreferred = (p) => Math.abs(Math.hypot(p.x - armBase.x, p.y - armBase.y) - 0.8 * 0.3);
+assert.ok(fromPreferred(drops[0]) <= fromPreferred(drops.at(-1)), "0.8 of the arm's reach first");
 assert.deepEqual(carryTargets({ x: 0.15, y: 0.3 }, arena, [barrier], armBase, 0.3), [], "nothing on the far side of the wall is within reach");
 console.log(`PASS  fully blocked: ${drops.length} places for the arm to set the robot down, none when the goal's side is out of reach`);
 
