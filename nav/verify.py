@@ -23,15 +23,17 @@ from .run import Pipeline
 REQUIRED = (*CORNER_IDS, ROBOT_ID)
 
 
-def run_clip(folder, goal=None):
+def run_clip(folder, goal=None, objects=False, use_sam=True):
     with open(os.path.join(folder, "states.jsonl")) as f:
         records = [json.loads(l) for l in f if l.strip()]
-    pipe = Pipeline(goal_xy=goal)
+    pipe = Pipeline(goal_xy=goal, objects=objects, use_sam=use_sam, objects_every=2.0)
     per_frame = []
     for rec in records:
         frame = cv2.imread(os.path.join(folder, rec["file"]))
         t = rec["state"].get("t", 0) / 1000.0
         out = pipe.tick(frame, t)
+        if objects and pipe.objects is not None and rec is records[-1]:
+            pipe.objects.wait()                          # let the last scan finish so the result is judged
         per_frame.append({"tags": sorted(out["tags"]), "robot": out["robot"], "seg": None if out["seg"] is None else
                           {"persisted_frac": float(out["seg"]["persisted"][pipe.seg.arena].mean()),
                            "components": [{k: c[k] for k in ("x", "y", "area_cm2")} for c in out["seg"]["components"]]},
@@ -48,7 +50,7 @@ def check(name, ok, detail, results, skip=False):
 
 def verify(folder, args):
     print(f"\n== {folder}")
-    pipe, frames = run_clip(folder, args.goal)
+    pipe, frames = run_clip(folder, args.goal, args.objects, not args.no_sam)
     s = pipe.summary()
     results = []
     truth = next((f["truth"] for f in frames if f["truth"]), None)
@@ -107,6 +109,17 @@ def verify(folder, args):
         seen = sum(1 for f in hand_frames if f["seg"] and any(np.hypot(c["x"] - (f["truth"]["hand"][0] - origin[0]), c["y"] - (f["truth"]["hand"][1] - origin[1])) < 12 for c in f["seg"]["components"]))
         lag = pipe.seg.n_persist
         check("hand entering is mapped (after the persistence delay)", seen >= len(hand_frames) - 2 * lag, f"seen in {seen}/{len(hand_frames)} frames, persistence {lag} frames", results)
+    if args.objects:
+        ob = pipe.summary()["objects"]
+        if ob is None or pipe.objects is None or not pipe.objects.available:
+            check("Sean's object detector finds the known obstacles", False, "vision/ not in this checkout", results, skip=True)
+        elif obstacles:
+            errs = [min(np.hypot(x - ox_, y - oy_) for ox_, oy_ in obstacles) for x, y in ob["positions"]]
+            ok = ob["count"] == len(obstacles) and errs and max(errs) < 3.0
+            check("Sean's object detector finds the known obstacles (< 3 cm)", ok,
+                  f"{ob['count']} found / {len(obstacles)} known, worst {max(errs) if errs else float('nan'):.1f} cm, {ob['scans']} scans, {'SAM' if ob['sam'] else 'no SAM'}, last {ob['last_ms'] or 0:.0f} ms: {ob['labels']}", results)
+        else:
+            check("Sean's object detector finds nothing on the empty arena", ob["count"] == 0, f"{ob['count']} found: {ob['labels']}", results)
     plans = [f["plan_ms"] for f in frames if f["plan_ms"] is not None][1:]   # the first plan follows the planner's boot
     if plans:
         check("full replan time < 15 ms", max(plans) < 15, f"median {np.median(plans):.1f} ms, max {max(plans):.1f} ms ({pipe.planner.rows}x{pipe.planner.cols} grid)", results)
@@ -131,6 +144,8 @@ def main(argv=None):
     ap.add_argument("--obstacles", type=lambda s: [tuple(map(float, p.split(","))) for p in s.split(";") if p], help='"x,y;x,y" in arena cm')
     ap.add_argument("--lights-at", type=int, help="frame index where the lighting changed")
     ap.add_argument("--goal", type=float, nargs=2)
+    ap.add_argument("--objects", action="store_true", help="also run Sean's object detector and check it")
+    ap.add_argument("--no-sam", action="store_true")
     args = ap.parse_args(argv)
     failed = 0
     for clip in args.clips:

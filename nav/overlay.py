@@ -68,7 +68,12 @@ def compose(frame, tags, g, rect, seg_out, planner, plan, robot, goal_xy, lookah
                     cv2.drawContours(m, [c["contour"]], -1, WHITE, 2)
                 x, y, w, h = c["bbox"]
                 cv2.putText(m, f"{c['area_cm2']:.0f} cm2", (x, max(12, y - 4)), FONT, 0.5, WHITE, 1, cv2.LINE_AA)
-        m, _ = fit(m); label(m, "3 obstacles (red persisted, yellow pending)"); panels.append(m)
+            for o in seg_out.get("objects", []):                       # Sean's detector: outline in orange, name
+                pts = np.round(g.world_to_rect(np.array(o["outline"], dtype=float))).astype(np.int32)
+                cv2.polylines(m, [pts], True, ORANGE, 2)
+                u, v = g.world_to_rect([[o["x"], o["y"]]])[0]
+                cv2.putText(m, o["label"], (int(u) - 30, int(v) + 5), FONT, 0.5, ORANGE, 2, cv2.LINE_AA)
+        m, _ = fit(m); label(m, "3 obstacles (red chroma, orange objects)"); panels.append(m)
         # 4. inflated C-space
         cs = (rect * 0.45).astype(np.uint8)
         if planner is not None and planner.free is not None:

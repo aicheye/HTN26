@@ -4,7 +4,9 @@
                                 [--goal X Y] [--summary out.json]
     .venv/bin/python -m nav.run --live qnxpi78.local [--unit 3]
 
-Stages 1-4 and the overlay. No robot control yet: the state machine only goes CALIBRATING -> IDLE ->
+Stages 1-4 and the overlay. --objects adds Sean's object detector (vision/detect.py, MobileSAM when its
+model files are in vision/models) as a second, labelled obstacle layer scanned every few seconds in a
+background thread and OR-ed into the costmap. No robot control yet: the state machine only goes CALIBRATING -> IDLE ->
 PLANNING -> NAVIGATING/BLOCKED as labels, and the command shown is always "none".
 
 Live mode polls the Pi tracker's /frame.jpg, which serves about 2 frames a second and pauses tracking for
@@ -25,6 +27,7 @@ import cv2
 from .geometry import Geometry, CORNER_IDS, ROBOT_ID
 from .segment import Segmenter
 from .planner import Planner
+from .objects import ObjectLayer
 from . import overlay
 
 LOOP_HZ = 20.0
@@ -83,8 +86,10 @@ class LiveSource:
 
 
 class Pipeline:
-    def __init__(self, goal_xy=None, seed=0):
+    def __init__(self, goal_xy=None, seed=0, objects=False, use_sam=True, objects_every=4.0):
         self.g = None
+        self.want_objects, self.use_sam, self.objects_every = objects, use_sam, objects_every
+        self.objects = None
         self.seg = self.planner = None
         self.radius = None
         self._radius_samples = []
@@ -138,6 +143,9 @@ class Pipeline:
                     if len(self._radius_samples) >= RADIUS_SAMPLES:
                         self.radius = float(np.median(self._radius_samples))
                         self.planner = Planner(self.g, self.radius)
+                        if self.want_objects:
+                            self.objects = ObjectLayer(self.g, every_s=self.objects_every, use_sam=self.use_sam)
+                            print(self.objects.status())
                         self.state = "IDLE"
                         gc.collect()
                         gc.freeze()          # boot-time objects never get scanned again: no collection pauses in the loop
@@ -145,7 +153,12 @@ class Pipeline:
             else:
                 seg_out = self.seg.segment(rect, self.valid, robot, self.radius)
                 marks.append(("segment", time.perf_counter()))
-                self.planner.update(seg_out["persisted"])
+                occupied = seg_out["persisted"]
+                if self.objects is not None:
+                    self.objects.offer(frame, robot, t)
+                    occupied = occupied | self.objects.mask
+                    seg_out["objects"] = self.objects.objects
+                self.planner.update(occupied)
                 marks.append(("costmap", time.perf_counter()))
                 if robot is not None:
                     start_rc = self.planner.index([robot["x"], robot["y"]])
@@ -186,7 +199,7 @@ class Pipeline:
                 f"tags    {sorted(tags)}  unexpected {s.get('unexpected_ids', 0)}",
                 f"board   {tuple(round(v, 1) for v in s['board_cm']) if s.get('board_cm') else '-'} cm  cam {s.get('camera_height_cm') or 0:.0f} cm",
                 f"robot r {self.radius or 0:.1f} cm   free {free if free is not None else 0:.0f} %",
-                f"plan    {np.mean(self.plan_ms[-20:]) if self.plan_ms else 0:.1f} ms"]
+                f"plan    {np.mean(self.plan_ms[-20:]) if self.plan_ms else 0:.1f} ms"] + ([self.objects.status()] if self.objects else [])
 
     def summary(self):
         g = self.g.summary() if self.g else {}
@@ -197,7 +210,10 @@ class Pipeline:
                 "plan_ms_median": float(np.median(self.plan_ms)) if self.plan_ms else None,
                 "plan_ms_max": float(np.max(self.plan_ms)) if self.plan_ms else None,
                 "frames_all_tags": int(sum(1 for t in self.tags_per_frame if all(i in t for i in (*CORNER_IDS, ROBOT_ID)))),
-                "state": self.state}
+                "state": self.state,
+                "objects": None if self.objects is None else {"count": len(self.objects.objects), "scans": self.objects.runs, "sam": self.objects.sam is not None,
+                                                                "last_ms": self.objects.last_ms, "labels": [o["label"] for o in self.objects.objects],
+                                                                "positions": [(o["x"], o["y"]) for o in self.objects.objects]}}
 
 
 def main(argv=None):
@@ -212,11 +228,14 @@ def main(argv=None):
     ap.add_argument("--goal", type=float, nargs=2, metavar=("X", "Y"), help="goal in arena cm (default: picked automatically)")
     ap.add_argument("--summary", help="write the run summary as JSON here")
     ap.add_argument("--overlay-every", type=int, default=2, help="compose the overlay every N ticks (it costs ~15 ms)")
+    ap.add_argument("--objects", action="store_true", help="also run Sean's object detector (vision/) as a second obstacle layer")
+    ap.add_argument("--no-sam", action="store_true", help="object detector without MobileSAM (colour and parallax cues only)")
+    ap.add_argument("--objects-every", type=float, default=4.0, help="seconds between object scans")
     args = ap.parse_args(argv)
     if not args.replay and not args.live:
         ap.error("--replay or --live is required")
     source = ReplaySource(args.replay, args.fast, args.loop) if args.replay else LiveSource(args.live, args.unit)
-    pipe = Pipeline(goal_xy=args.goal)
+    pipe = Pipeline(goal_xy=args.goal, objects=args.objects, use_sam=not args.no_sam, objects_every=args.objects_every)
     writer = None
     last_wall, hz = time.perf_counter(), 0.0
     try:
@@ -244,6 +263,9 @@ def main(argv=None):
             writer.release()
         if not args.headless:
             cv2.destroyAllWindows()
+    if pipe.objects is not None:
+        pipe.objects.wait(5.0)
+        pipe.objects.close()
     s = pipe.summary()
     print(json.dumps(s, indent=1, default=float))
     if args.summary:
