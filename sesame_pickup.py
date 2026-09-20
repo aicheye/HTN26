@@ -51,11 +51,12 @@ from so101_ik import JOINTS, ik, fk, TABLE_Z
 
 HOLD_S = 0.6            # keep the demo running this long past the grasp mark (the jaws finish closing)
 LIFT_CM = 6.0
-CARRY_PITCHES = (-92.0, -85.0, -78.0, -70.0, -62.0, -55.0)   # tried in order: the least tilt that reaches the carry height wins
+CARRY_PITCHES = (-92.0, -85.0, -78.0, -70.0, -62.0, -55.0, -45.0, -35.0, -25.0)   # least tilt that reaches wins
+GRIP_PITCHES = (-90.0, -85.0, -80.0, -75.0, -70.0, -65.0, -60.0, -55.0, -50.0, -45.0, -40.0, -35.0, -30.0, -25.0, -20.0)
 CARRY_CM_PER_S = 5.0
 VERTICAL_CM_PER_S = 4.0
 RELEASE_S = 1.0
-DROP_CANDIDATES = [(0, 10), (0, -10), (0, 7), (0, -7), (-4, 8), (-4, -8), (-6, 0)]
+DROP_CANDIDATES = [(0, 10), (0, -10), (0, 7), (0, -7), (-4, 8), (-4, -8), (-6, 0), (-3, 4), (-3, -4), (0, 0)]   # (0, 0): set it back down in place
 READY = {j: 0.0 for j in JOINTS}
 RETRIGGER_CM = 5.0      # auto mode: grip again once the Sesame is this far from where it was last set down
 RETRY_S = 6.0           # auto mode: after a refused plan, wait this long (or a moved Sesame) before trying again
@@ -70,8 +71,14 @@ def auto_demo(obs, frame, args):
     gx, gy = np.array([tag["x"], tag["y"]]) + R @ [args.grip_along, args.grip_across]
     z_grip = (obs["robot"].get("z", 10.5) + args.grip_above_tag + 100 * TABLE_Z) / 100
     jaw = (tag["heading"] + args.jaw_angle + 180) % 360 - 180
-    steps = [(0.035, -65, GRIPPER_OPEN_AUTO), (0.025, -72, GRIPPER_OPEN_AUTO), (0.015, -80, GRIPPER_OPEN_AUTO), (0.006, -87, GRIPPER_OPEN_AUTO), (0.0, -90, GRIPPER_OPEN_AUTO),
-             (0.0, -90, GRIPPER_OPEN_AUTO * 0.5), (0.0, -90, 0.0), (0.0, -90, 0.0)]
+    # the grip pitch: straight down when the arm reaches it, else tilted forward only as far as needed
+    grip_pitch = next((pp for pp in GRIP_PITCHES if ik(gx / 100, gy / 100, z_grip, jaw, pp) is not None), None)
+    if grip_pitch is None:
+        grip_pitch = -90.0                                  # let plan() report the unreachable grip
+    approach = min(-45.0, grip_pitch + 25.0)                # come in a little flatter than the grip, then straighten
+    steps = [(0.035, approach, GRIPPER_OPEN_AUTO), (0.025, approach + (grip_pitch - approach) * 0.3, GRIPPER_OPEN_AUTO),
+             (0.015, approach + (grip_pitch - approach) * 0.6, GRIPPER_OPEN_AUTO), (0.006, approach + (grip_pitch - approach) * 0.85, GRIPPER_OPEN_AUTO),
+             (0.0, grip_pitch, GRIPPER_OPEN_AUTO), (0.0, grip_pitch, GRIPPER_OPEN_AUTO * 0.5), (0.0, grip_pitch, 0.0), (0.0, grip_pitch, 0.0)]
     samples, keyframes, t = [], [], 0.0
     for dz, pitch, grip in steps:
         pose = {"x": gx / 100, "y": gy / 100, "z": z_grip + dz, "pitch": pitch, "jaw_yaw": jaw}
@@ -119,8 +126,8 @@ def carry_ok(pick, drop, lift_m, pitch, n=12):
 def carry_pitch(pick, drop, lift_m):
     """The least tilt (closest to the grasp pitch) at which the whole lift, carry and lower path is reachable."""
     for pitch in CARRY_PITCHES:
-        if pitch > pick["pitch"] + 40:
-            break
+        if pitch < pick["pitch"] - 2:                 # never steeper than the grip itself
+            continue
         if carry_ok(pick, drop, lift_m, pitch):
             return pitch
     return None
@@ -172,9 +179,8 @@ def plan(demo, frame0, obs, args):
     pick = {k: grip_end[k] for k in ("x", "y", "z", "jaw_yaw", "pitch")}
     if ik(pick["x"], pick["y"], pick["z"], pick["jaw_yaw"], pick["pitch"]) is None:
         dist = 100 * np.hypot(pick["x"], pick["y"])
-        reach = max((r for r in np.arange(5, 40, 0.5) if ik(r / 100, 0, pick["z"], 0, pick["pitch"]) is not None), default=0)
-        return None, (f"the Sesame is {dist:.0f} cm from the arm's base, at ({100*pick['x']:.0f}, {100*pick['y']:.0f}) cm in the arm's frame; "
-                      f"the top-down grip reaches about {reach:.0f} cm at that height. Move the Sesame closer to the arm.")
+        return None, (f"the grip point is {dist:.0f} cm from the arm's base, at ({100*pick['x']:.0f}, {100*pick['y']:.0f}, {100*pick['z']:.0f}) cm in the arm's frame, "
+                      f"and no gripper tilt from straight down to 20 deg reaches it.")
     drop, pitch = pick_drop(pick, args)
     if drop is None:
         return None, "no reachable drop point near the pick, even tilted for the carry: lower --lift, or pass --drop-offset / --drop"
