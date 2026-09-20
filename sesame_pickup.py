@@ -136,7 +136,7 @@ def auto_demo(obs, frame, args):
     gx, gy = gx + corr["ahead"], gy + corr["left"]          # the kept correction plus this attempt's trial shift
     z_grip += corr.get("up", 0.0) / 100
     # the grip pitch: straight down when the arm reaches it, else tilted forward only as far as needed
-    grip_pitch = next((pp for pp in GRIP_PITCHES if ik(gx / 100, gy / 100, z_grip, jaw, pp) is not None), None)
+    grip_pitch = next((pp for pp in GRIP_PITCHES if ik_exact(gx / 100, gy / 100, z_grip, jaw, pp) is not None), None)
     if grip_pitch is None:
         grip_pitch = -90.0                                  # let plan() report the unreachable grip
     approach = max(grip_pitch, min(-45.0, grip_pitch + 25.0))   # a little flatter than the grip, never steeper
@@ -145,7 +145,7 @@ def auto_demo(obs, frame, args):
                 (height * 0.43, approach + (grip_pitch - approach) * 0.6), (height * 0.17, approach + (grip_pitch - approach) * 0.85)]
     # the approach from 3.5 cm above; if the arm cannot reach that high out here, come in lower
     for height in (0.035, 0.025, 0.015, 0.008, 0.0):
-        if all(ik(gx / 100, gy / 100, z_grip + dz, jaw, pp) is not None for dz, pp in approach_steps(height)):
+        if all(ik_exact(gx / 100, gy / 100, z_grip + dz, jaw, pp) is not None for dz, pp in approach_steps(height)):
             break
     steps = [(dz, pp, GRIPPER_OPEN_AUTO) for dz, pp in approach_steps(height)] + \
             [(0.0, grip_pitch, GRIPPER_OPEN_AUTO), (0.0, grip_pitch, GRIPPER_OPEN_AUTO * 0.5), (0.0, grip_pitch, 0.0), (0.0, grip_pitch, 0.0)]
@@ -175,8 +175,13 @@ def cartesian(p0, p1, seconds, t_start, gripper):
     return out
 
 
+def ik_exact(x, y, z, jaw, pitch):
+    """The pickup's IK: the jaw heading's direction is kept, so the fixed jaw is always on the same side of the tag."""
+    return ik(x, y, z, jaw, pitch, exact_jaw=True)
+
+
 def solvable(poses):
-    return all(ik(p["x"], p["y"], p["z"], p["jaw_yaw"], p["pitch"]) is not None for p in poses)
+    return all(ik_exact(p["x"], p["y"], p["z"], p["jaw_yaw"], p["pitch"]) is not None for p in poses)
 
 
 def carry_ok(pick, drop, lift_m, pitch, n=12):
@@ -188,7 +193,7 @@ def carry_ok(pick, drop, lift_m, pitch, n=12):
         for i in range(n + 1):
             f = i / n
             q = {k: a[k] + (b[k] - a[k]) * f for k in ("x", "y", "z", "pitch")}
-            if ik(q["x"], q["y"], q["z"], pick["jaw_yaw"], q["pitch"]) is None:
+            if ik_exact(q["x"], q["y"], q["z"], pick["jaw_yaw"], q["pitch"]) is None:
                 return False
     return True
 
@@ -241,13 +246,13 @@ def plan(demo, frame0, obs, args):
     poses = place(offsets, tag_now)
     for lift in (PRE_APPROACH_CM, PRE_APPROACH_CM / 2, 1.0):
         pre = dict(poses[0]); pre["z"] += lift / 100; pre["t"] = poses[0]["t"] - 1.5
-        if ik(pre["x"], pre["y"], pre["z"], pre["jaw_yaw"], pre["pitch"]) is not None:
+        if ik_exact(pre["x"], pre["y"], pre["z"], pre["jaw_yaw"], pre["pitch"]) is not None:
             poses = [pre] + poses
             break
     open_value = max(s["gripper"] for s in demo["samples"] if s["t"] <= grasp["t"])   # how far the jaws were open before the grip
     grip_end = poses[-1]
     pick = {k: grip_end[k] for k in ("x", "y", "z", "jaw_yaw", "pitch")}
-    if ik(pick["x"], pick["y"], pick["z"], pick["jaw_yaw"], pick["pitch"]) is None:
+    if ik_exact(pick["x"], pick["y"], pick["z"], pick["jaw_yaw"], pick["pitch"]) is None:
         dist = 100 * np.hypot(pick["x"], pick["y"])
         return None, (f"the grip point is {dist:.0f} cm from the arm's base, at ({100*pick['x']:.0f}, {100*pick['y']:.0f}, {100*pick['z']:.0f}) cm in the arm's frame, "
                       f"and no gripper tilt from straight down to 20 deg reaches it.")
@@ -274,7 +279,7 @@ def plan(demo, frame0, obs, args):
     for name, ps in phases:
         tr, failed = solve(ps, grasp["t"] if name == "grip" else -1e9, None if name == "grip" else -1e9, args.squeeze if name == "grip" else 0.0)
         if name != "grip":
-            tr = [(p["t"] - ps[0]["t"] + ps[0]["t"] - t0, q, g) for (_, q, g), p in zip(tr, [p for p in ps if ik(p["x"], p["y"], p["z"], p["jaw_yaw"], p["pitch"]) is not None])]
+            tr = [(p["t"] - ps[0]["t"] + ps[0]["t"] - t0, q, g) for (_, q, g), p in zip(tr, [p for p in ps if ik_exact(p["x"], p["y"], p["z"], p["jaw_yaw"], p["pitch"]) is not None])]
         else:
             tr = [(tt + ps[0]["t"] - t0, q, g) for tt, q, g in tr]
         last = ps[-1]
@@ -321,7 +326,7 @@ def main():
     ap.add_argument("--hinge", type=float, default=0.0, help="0 (default): grip at the tag centre. N: the hinges sit N cm from the centre at either end along the heading; the nearer one to the arm is gripped")
     ap.add_argument("--grip-across", type=float, default=0.0, help="cm to the tag's left")
     ap.add_argument("--grip-above-tag", type=float, default=0.7, help="jaws close this many cm above the tag's reported height")
-    ap.add_argument("--jaw-angle", type=float, default=90.0, help="jaw axis relative to the tag heading; 90 = across the body")
+    ap.add_argument("--jaw-angle", type=float, default=90.0, help="jaw axis relative to the tag heading, kept exactly: 90 and -90 both close across the body but with the fixed and moving jaws swapped; 0 closes along it")
     ap.add_argument("--tracker"); ap.add_argument("--frame", default="arm_frame.json"); ap.add_argument("--port", default=default_port(), help="arm serial port (default: the USB serial device found, or $SO101_PORT)")
     ap.add_argument("--drop-offset", type=float, nargs=2, metavar=("DX", "DY"), help="cm from the pick point, base frame")
     ap.add_argument("--drop", type=float, nargs=2, metavar=("X", "Y"), help="absolute base-frame cm")

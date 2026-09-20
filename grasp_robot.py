@@ -80,7 +80,7 @@ def solve(poses, grasp_t, release_t, squeeze):
     traj, failed = [], []
     t_off = poses[0]["t"]
     for i, p in enumerate(poses):
-        q = ik(p["x"], p["y"], p["z"], p["jaw_yaw"], p["pitch"])
+        q = ik(p["x"], p["y"], p["z"], p["jaw_yaw"], p["pitch"], exact_jaw=True)
         if q is None:
             failed.append((i, p))
             continue
