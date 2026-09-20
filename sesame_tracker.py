@@ -218,7 +218,21 @@ def open_camera_page(host=None, unit=3, units=None):
     import webbrowser
     client = os.path.join(HERE, "pi", "client")
     if not os.path.isfile(os.path.join(client, "demo.html")):
-        print("   (Sean's camera page is not in this checkout: pi/client missing)")
+        # Sean removed demo.html in 535f77d ("Use the web UI as the only live view"); restore it from the commit
+        # before that, locally and untracked. floor.js next to it is still on his branch.
+        os.makedirs(client, exist_ok=True)
+        try:
+            subprocess.run(["git", "fetch", "-q", "origin", "devel/sean"], cwd=HERE, check=False, timeout=30)
+            html = subprocess.run(["git", "show", "535f77d~1:pi/client/demo.html"], cwd=HERE, capture_output=True, text=True, timeout=30)
+            if html.returncode == 0 and "<title>" in html.stdout.lower():
+                with open(os.path.join(client, "demo.html"), "w") as f:
+                    f.write(html.stdout)
+            if not os.path.isfile(os.path.join(client, "floor.js")):
+                subprocess.run(["git", "restore", "--source=origin/devel/sean", "--", "pi/client/floor.js"], cwd=HERE, check=False, timeout=30)
+        except Exception:
+            pass
+    if not os.path.isfile(os.path.join(client, "demo.html")):
+        print("   (Sean's camera page could not be restored: pi/client/demo.html missing)")
         return False
     if not _port_open(5500):
         _page_server = subprocess.Popen([sys.executable, "-m", "http.server", "5500", "--bind", "127.0.0.1"], cwd=client,
