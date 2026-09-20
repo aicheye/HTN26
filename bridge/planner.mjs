@@ -113,6 +113,16 @@ function buildGrid(arena, obstacles, robotRadius) {
   return { cols, rows, centre, cellOf, blocked, cellCost, slackOf, nearestFree, neighbours };
 }
 
+// The grid the planner works on, for display: per cell the cost of walking through it (1 on open floor, up to
+// 1 + SOFT_WEIGHT at a limit), or -1 where the robot's centre may not be. Row 0 is y = 0.
+export function costmap(arena, obstacles, robotRadius = ROBOT_RADIUS_M) {
+  const grid = buildGrid(arena, obstacles, robotRadius);
+  return {
+    cell: CELL_M, cols: grid.cols, rows: grid.rows, clearance: robotRadius + CLEARANCE_EXTRA_M, edgeMargin: EDGE_MARGIN_M,
+    cost: Array.from(grid.cellCost, (c, i) => (grid.blocked[i] ? -1 : Math.round(c * 10) / 10)),
+  };
+}
+
 // Where an arm can set the robot down so that it can walk to the goal, for when no path exists from where it
 // stands. Returns up to `count` points, best first, or [] when there is none: free cells that are connected to the
 // goal, at least CARRY_SLACK_M clear of every limit so that a drop that is a little off still lands on free floor,

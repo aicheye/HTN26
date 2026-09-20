@@ -57,7 +57,7 @@ export class Navigator {
   }
 
   status() {
-    return { state: this.state, detail: this.detail, recoveries: this.recoveries, motion: this.motion };
+    return { state: this.state, detail: this.detail, recoveries: this.recoveries, motion: this.motion, command: this.drive, waypoints: this.path.length, carries: this.carries ?? 0 };
   }
 
   start(goal) {

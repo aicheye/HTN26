@@ -134,6 +134,7 @@ export function withArm(state: WorldState): WorldState {
   return {
     ...state,
     obstacles: state.obstacles.filter((o) => !isArm(o)),
+    hiddenObstacles: state.obstacles.filter((o) => isArm(o) && o.id !== ARM_TAG_OBSTACLE_ID).map((o) => ({ ...o, label: `the arm (${o.label ?? o.id})` })),
     // The bridge has no joint telemetry, so the arm is drawn at rest. Its mode still says when it has been asked
     // to carry the robot past an obstacle, which both maps show as a label.
     arm: state.mission?.state === "carrying"

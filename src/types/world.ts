@@ -154,9 +154,14 @@ export type WorldState = {
 
   robots: Robot[];
   obstacles: Obstacle[];
+  hiddenObstacles?: Obstacle[]; // detected, avoided by the planner, but not drawn: the camera's detection of the arm
   // The bridge's navigation state, for display. "carrying": goto found no walkable path and waits for the arm to
   // lift the robot to one of `carry.drops`, from where the goal can be walked to.
-  mission?: { state: string; detail?: string; carry?: { id: number; drops: Point[] } };
+  mission?: {
+    state: string; detail?: string; carry?: { id: number; drops: Point[] };
+    command?: string; waypoints?: number; recoveries?: number; carries?: number; edgeStops?: number;
+    robotRadius?: number; drive?: string; trackerFps?: number; floorMarkers?: number; robotConnected?: boolean;
+  };
   goal?: Point; // where the user clicked
   path?: Point[]; // planner output
   arm?: ArmState; // pick-and-place assist arm, if the rig has one

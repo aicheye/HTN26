@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { CARRY_SLACK_M, CLEARANCE_M, EDGE_MARGIN_M, carryTargets, distanceToObstacle, leavesArena, planPath } from "./planner.mjs";
+import { CARRY_SLACK_M, CLEARANCE_M, EDGE_MARGIN_M, carryTargets, costmap, distanceToObstacle, leavesArena, planPath } from "./planner.mjs";
 
 const arena = { width: 0.76, length: 0.6 };
 // Scenes keep the robot's centre inside the 0.07 m limit at the edge.
@@ -114,3 +114,13 @@ for (const drop of drops) {
 assert.ok(Math.hypot(drops[0].x - armBase.x, drops[0].y - armBase.y) <= Math.hypot(drops.at(-1).x - armBase.x, drops.at(-1).y - armBase.y), "nearest to the arm first");
 assert.deepEqual(carryTargets({ x: 0.15, y: 0.3 }, arena, [barrier], armBase, 0.3), [], "nothing on the far side of the wall is within reach");
 console.log(`PASS  fully blocked: ${drops.length} places for the arm to set the robot down, none when the goal's side is out of reach`);
+
+// The grid as the telemetry panel gets it: -1 where the robot's centre may not be, 1 on open floor, up to 4 at a limit.
+const shown = costmap(square, [beside]);
+assert.deepEqual([shown.cols, shown.rows, shown.cost.length], [32, 32, 1024]);
+const cellAt = (x, y) => shown.cost[Math.floor(y / shown.cell) * shown.cols + Math.floor(x / shown.cell)];
+assert.equal(cellAt(0.3, 0.3), -1, "inside the box");
+assert.equal(cellAt(0.03, 0.3), -1, "past the limit at the edge");
+assert.equal(cellAt(0.5, 0.5), 1, "open floor");
+assert.ok(cellAt(0.3, 0.47) > 1 && cellAt(0.3, 0.47) <= 4, "within 5 cm of the box's clearance");
+console.log("PASS  costmap for display: blocked, open and near-limit cells");

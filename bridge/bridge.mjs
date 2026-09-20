@@ -19,7 +19,7 @@ import { WebSocketServer } from "ws";
 import { pixelToFloor } from "../pi/client/floor.js";
 import { GaitEngine } from "./gait.mjs";
 import { Navigator } from "./navigator.mjs";
-import { EDGE_MARGIN_M, ROBOT_RADIUS_M, carryTargets, leavesArena } from "./planner.mjs";
+import { EDGE_MARGIN_M, ROBOT_RADIUS_M, carryTargets, costmap, leavesArena } from "./planner.mjs";
 import { PoseFilter } from "./pose-filter.mjs";
 import { createVoiceHandler } from "./voice.mjs";
 
@@ -201,7 +201,11 @@ function buildState() {
     robots: robot ? [robot] : [],
     obstacles: [...(arm ? [arm] : []), ...cvObstacles, ...manualObstacles],
     ...(navigator.goal ? { goal: navigator.goal, path: robot ? [{ x: robot.x, y: robot.y }, ...navigator.path] : navigator.path } : {}),
-    mission: { ...navigator.status(), edgeStops, robotRadius, ...(carry ? { carry: { id: carry.id, drops: carry.drops } } : {}) },  // not part of the frontend schema: navigation state for display and debugging
+    mission: {
+      ...navigator.status(), edgeStops, robotRadius, drive: drive.mode,
+      trackerFps: tracker?.fps ?? 0, floorMarkers: tracker?.floorMarkers ?? 0, robotConnected: robotSocket?.readyState === WebSocket.OPEN,
+      ...(carry ? { carry: { id: carry.id, drops: carry.drops } } : {}),
+    },  // not part of the frontend schema: navigation state for display and debugging
   };
 }
 
@@ -272,6 +276,11 @@ const server = http.createServer((request, response) => {
     return response.end(png);
   }
   if (request.url === "/objects" && request.method === "GET") return reply(200, cvObstacles);
+  // The planner's grid for the telemetry panel: what is blocked, and what walking through each free cell costs.
+  if (request.url === "/costmap" && request.method === "GET") {
+    const state = latestState ?? buildState();
+    return reply(200, costmap(state.arena, state.obstacles, robotRadius));
+  }
   // The pending carry request for the arm, with the drop points in the tracker's floor frame in cm, or {}.
   if (request.url === "/carry" && request.method === "GET") {
     return reply(200, carry ? { id: carry.id, drops: carry.drops.map(toFloorCm), ageMs: Date.now() - carry.requestedAt } : {});
