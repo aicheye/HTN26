@@ -1,9 +1,14 @@
-import { ARM_REST_POSE } from "../components/mapShared";
+import { ARM_REST_POSE, distanceTo } from "../components/mapShared";
 import type { Ack, Command, Envelope, WorldState } from "../types/world";
 import type { ConnectionStatus, StateSource } from "./StateSource";
 
 /** id the bridge gives the arm's own tracked-tag obstacle (bridge/bridge.mjs). */
 const ARM_TAG_OBSTACLE_ID = "so101-base";
+// A camera-detected object is the arm itself when its footprint reaches the arm's base: within 3 cm of the mount,
+// or within the 9 cm base radius of the tracked tag, which sits on the base. On 2026-09-19 the arm's detection
+// covered the mount (0 cm) and was 2 cm from the tag. A real box beside the arm was 7.6 cm and 15 cm away.
+const ARM_AT_MOUNT_M = 0.03;
+const ARM_AT_TAG_M = 0.09;
 
 /** Real backend: expects Envelope JSON frames over a WebSocket. Unused until the camera exists. */
 export class WebSocketSource implements StateSource {
@@ -58,7 +63,7 @@ export class WebSocketSource implements StateSource {
           console.warn("WebSocketSource: dropped malformed state frame", msg.data);
           return;
         }
-        this.stateSubs.forEach((cb) => cb(this.withArm(msg.data)));
+        this.stateSubs.forEach((cb) => cb(withArm(msg.data)));
       } else if (msg.type === "ack") this.ackSubs.forEach((cb) => cb(msg.data));
     };
     ws.onerror = () => this.status("error");
@@ -98,35 +103,39 @@ export class WebSocketSource implements StateSource {
     this.statusSubs.forEach((cb) => cb(s));
   }
 
-  /**
-   * The bridge only reports the arm's tracked base as a plain circle obstacle -
-   * it has no joint telemetry. Turn that into a resting ArmState so the
-   * articulated 3D model still shows up (just not animated) when live.
-   */
-  private withArm(state: WorldState): WorldState {
-    if (state.arm) return state;
-    const tag = state.obstacles.find((o) => o.id === ARM_TAG_OBSTACLE_ID);
-    if (!tag) return state;
+}
 
-    // real mount is bolted to the center of one of the arena's longer edges;
-    // the tracked tag position is noisy, so only use it to pick which long
-    // edge it's on, then snap to that edge's exact center
-    const { width, length } = state.arena;
-    const longIsNorthSouth = width >= length;
-    const mount = longIsNorthSouth
-      ? tag.y <= length / 2
-        ? { x: width / 2, y: 0, yaw: Math.PI / 2, side: "south" as const }
-        : { x: width / 2, y: length, yaw: -Math.PI / 2, side: "north" as const }
-      : tag.x <= width / 2
-        ? { x: 0, y: length / 2, yaw: 0, side: "west" as const }
-        : { x: width, y: length / 2, yaw: Math.PI, side: "east" as const };
+/**
+ * The bridge only reports the arm's tracked base as a plain circle obstacle -
+ * it has no joint telemetry. Turn that into a resting ArmState so the
+ * articulated 3D model still shows up (just not animated) when live.
+ */
+export function withArm(state: WorldState): WorldState {
+  if (state.arm) return state;
+  const tag = state.obstacles.find((o) => o.id === ARM_TAG_OBSTACLE_ID);
+  if (!tag) return state;
 
-    return {
-      ...state,
-      obstacles: state.obstacles.filter((o) => o.id !== ARM_TAG_OBSTACLE_ID),
-      arm: { mount, joints: ARM_REST_POSE, mode: "idle" },
-    };
-  }
+  // The mount is bolted to the centre of one table edge. The tracked tag position is noisy, so it only picks
+  // the edge, the one it is nearest to, and the mount snaps to that edge's exact centre.
+  const { width, length } = state.arena;
+  const edges = [
+    { distance: Math.abs(tag.x), mount: { x: 0, y: length / 2, yaw: 0, side: "west" as const } },
+    { distance: Math.abs(width - tag.x), mount: { x: width, y: length / 2, yaw: Math.PI, side: "east" as const } },
+    { distance: Math.abs(tag.y), mount: { x: width / 2, y: 0, yaw: Math.PI / 2, side: "south" as const } },
+    { distance: Math.abs(length - tag.y), mount: { x: width / 2, y: length, yaw: -Math.PI / 2, side: "north" as const } },
+  ];
+  const mount = edges.reduce((nearest, edge) => (edge.distance < nearest.distance ? edge : nearest)).mount;
+
+  // The camera also detects the arm as an object. The arm model already shows it, so that detection is not drawn
+  // a second time. The bridge keeps it in its own obstacle list, where path planning still avoids it.
+  const isArm = (o: WorldState["obstacles"][number]) =>
+    o.id === ARM_TAG_OBSTACLE_ID || (o.source === "cv" && (distanceTo(o, mount) < ARM_AT_MOUNT_M || distanceTo(o, tag) < ARM_AT_TAG_M));
+
+  return {
+    ...state,
+    obstacles: state.obstacles.filter((o) => !isArm(o)),
+    arm: { mount, joints: ARM_REST_POSE, mode: "idle" },
+  };
 }
 
 /**

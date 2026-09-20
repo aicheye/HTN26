@@ -1043,3 +1043,21 @@ test("Voice plans advance step by step, abort on failure and honour stop", (t) =
   assert.match(runner.check(), /did not reach home/);
   assert.match(runner.executePlan([{ type: "goto", name: "missing" }, { type: "forward", durationMs: 500 }]), /Not sent: step 1: .*Unknown/);
 });
+
+test("Live arm mounts on the edge nearest its tag, and the camera's detection of the arm is not drawn twice", async () => {
+  const { withArm } = await import("./src/sources/WebSocketSource.ts");
+  // Positions from the live arena on 2026-09-19: the tag sits just outside the left edge of a square field, the
+  // camera sees the arm reaching into the field as a long object, and a real cardboard box stands beside the arm.
+  const obstacles = [
+    { id: "so101-base", source: "tag", shape: "circle", x: -0.074, y: 0.291, yaw: 0.049, radius: 0.09 },
+    { id: "yellow-object-4", source: "cv", shape: "rect", x: 0.167, y: 0.319, yaw: 1.708, width: 0.102, length: 0.444 },
+    { id: "yellow-box-5", source: "cv", shape: "rect", x: 0.103, y: 0.48, yaw: 1.917, width: 0.177, length: 0.167 },
+    { id: "green-box-2", source: "cv", shape: "rect", x: 0.539, y: 0.091, yaw: 2.957, width: 0.118, length: 0.167 },
+    { id: "manual-1", source: "manual", shape: "rect", x: 0.02, y: 0.3, yaw: 0, width: 0.05, length: 0.05 },
+  ];
+  const state = withArm({ arena: { width: 0.63, length: 0.63 }, robots: [], obstacles });
+  assert.deepEqual(state.arm.mount, { x: 0, y: 0.315, yaw: 0, side: "west" });
+  assert.deepEqual(state.obstacles.map((o) => o.id), ["yellow-box-5", "green-box-2", "manual-1"]);
+  const north = withArm({ arena: { width: 0.63, length: 0.63 }, robots: [], obstacles: [{ ...obstacles[0], x: 0.3, y: 0.7 }] });
+  assert.equal(north.arm.mount.side, "north");
+});
