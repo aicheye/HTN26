@@ -49,9 +49,10 @@ class Planner:
         xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
         return np.column_stack([(xy[:, 0] - self.x0) / self.cell, (self.y1 - xy[:, 1]) / self.cell])   # (col, row), float
 
-    def cell_to_world(self, cr):
-        cr = np.asarray(cr, dtype=np.float64).reshape(-1, 2)
-        return np.column_stack([self.x0 + (cr[:, 0] + 0.5) * self.cell, self.y1 - (cr[:, 1] + 0.5) * self.cell])
+    def cell_to_world(self, rc):
+        """(row, col) cells -> world cm at the cell centres. Cells are (row, col) everywhere in this class."""
+        rc = np.asarray(rc, dtype=np.float64).reshape(-1, 2)
+        return np.column_stack([self.x0 + (rc[:, 1] + 0.5) * self.cell, self.y1 - (rc[:, 0] + 0.5) * self.cell])
 
     def index(self, xy):
         c, r = np.floor(self.world_to_cell(xy)[0]).astype(int)
@@ -147,7 +148,7 @@ class Planner:
         start = self.nearest_free(start_rc)
         blocked = start is None or not np.isfinite(field[start])
         path = [] if blocked else self.descend(start, goal)
-        return {"field": field, "path": path, "path_cm": self.cell_to_world(path)[:, ::1] if path else np.zeros((0, 2)),
+        return {"field": field, "path": path, "path_cm": self.cell_to_world(path) if path else np.zeros((0, 2)),
                 "waypoints": self.waypoints(path), "start": start, "goal": goal, "start_rescued": start != start_rc,
                 "blocked": blocked, "ms": 1000 * (time.perf_counter() - t0)}
 

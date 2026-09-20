@@ -31,13 +31,15 @@ def run_clip(folder, goal=None, objects=False, use_sam=True):
     for rec in records:
         frame = cv2.imread(os.path.join(folder, rec["file"]))
         t = rec["state"].get("t", 0) / 1000.0
-        out = pipe.tick(frame, t)
+        out = pipe.tick(frame, t, rec.get("state"))
         if objects and pipe.objects is not None and rec is records[-1]:
             pipe.objects.wait()                          # let the last scan finish so the result is judged
         per_frame.append({"tags": sorted(out["tags"]), "robot": out["robot"], "seg": None if out["seg"] is None else
                           {"persisted_frac": float(out["seg"]["persisted"][pipe.seg.arena].mean()),
                            "components": [{k: c[k] for k in ("x", "y", "area_cm2")} for c in out["seg"]["components"]]},
                           "plan_ms": out["plan"]["ms"] if out["plan"] else None, "blocked": out["plan"]["blocked"] if out["plan"] else None,
+                          "path_ends": None if not out["plan"] or len(out["plan"].get("path_cm", [])) < 2 else
+                                       (np.hypot(*(out["plan"]["path_cm"][0] - [out["robot"]["x"], out["robot"]["y"]])), np.hypot(*(out["plan"]["path_cm"][-1] - out["goal_xy"]))),
                           "truth": rec.get("truth")})
     return pipe, per_frame
 
@@ -120,6 +122,12 @@ def verify(folder, args):
                   f"{ob['count']} found / {len(obstacles)} known, worst {max(errs) if errs else float('nan'):.1f} cm, {ob['scans']} scans, {'SAM' if ob['sam'] else 'no SAM'}, last {ob['last_ms'] or 0:.0f} ms: {ob['labels']}", results)
         else:
             check("Sean's object detector finds nothing on the empty arena", ob["count"] == 0, f"{ob['count']} found: {ob['labels']}", results)
+    ends = [f["path_ends"] for f in frames if f["path_ends"] is not None]
+    if ends:
+        worst_start, worst_goal = max(e[0] for e in ends), max(e[1] for e in ends)
+        slack = 2.0 + (pipe.planner.r_cells + 4) * pipe.planner.cell      # the start may be rescued out of the inflation band
+        check("path starts at the robot and ends at the goal", worst_start <= slack and worst_goal <= 2.0,
+              f"start within {worst_start:.1f} cm of the robot (rescue allowance {slack:.0f}), end within {worst_goal:.1f} cm of the goal, {len(ends)} plans", results)
     plans = [f["plan_ms"] for f in frames if f["plan_ms"] is not None][1:]   # the first plan follows the planner's boot
     if plans:
         check("full replan time < 15 ms", max(plans) < 15, f"median {np.median(plans):.1f} ms, max {max(plans):.1f} ms ({pipe.planner.rows}x{pipe.planner.cols} grid)", results)

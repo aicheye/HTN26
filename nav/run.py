@@ -31,6 +31,7 @@ from .objects import ObjectLayer
 from . import overlay
 
 LOOP_HZ = 20.0
+TRACKER_POSE_AFTER = 30      # frames without a four-tag calibration before the tracker's recorded pose is used
 RADIUS_SAMPLES = 5           # robot radius measurements averaged at boot
 
 
@@ -86,8 +87,9 @@ class LiveSource:
 
 
 class Pipeline:
-    def __init__(self, goal_xy=None, seed=0, objects=False, use_sam=True, objects_every=4.0):
+    def __init__(self, goal_xy=None, seed=0, objects=False, use_sam=True, objects_every=4.0, robot_radius=None):
         self.g = None
+        self.radius_override = robot_radius
         self.want_objects, self.use_sam, self.objects_every = objects, use_sam, objects_every
         self.objects = None
         self.seg = self.planner = None
@@ -107,7 +109,8 @@ class Pipeline:
         self.frames = 0
         self.steady_from = None      # first tick index after calibration; loop timing counts from here
 
-    def tick(self, frame, t):
+    def tick(self, frame, t, state=None):
+        """state: the tracker's record for this frame when replaying a recording (fallback camera pose)."""
         t0 = time.perf_counter()
         marks = [("start", t0)]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -124,6 +127,9 @@ class Pipeline:
         self.tags_per_frame.append(sorted(tags))
         was_frozen = self.g.frozen
         self.g.try_freeze(tags, None if was_frozen else gray)
+        if not self.g.frozen and state is not None and self.frames >= TRACKER_POSE_AFTER and self.g.freeze_from_tracker(state):
+            missing = [i for i in CORNER_IDS if i not in tags]
+            print(f"corner tags {missing} never all in view: taking the Pi tracker's camera pose and its {state['floor']} cm floor instead (board size not derived)")
         marks.append(("freeze", time.perf_counter()))
         if self.g.frozen and (not was_frozen or self.valid is None):
             self.valid = self.g.validity_mask(frame.shape)
@@ -135,7 +141,15 @@ class Pipeline:
         if self.g.frozen:
             rect = self.g.rectify(frame)
             marks.append(("rectify", time.perf_counter()))
-            if self.radius is None:
+            if self.radius is None and self.radius_override is not None:
+                self.radius = float(self.radius_override)
+                self.planner = Planner(self.g, self.radius)
+                if self.want_objects:
+                    self.objects = ObjectLayer(self.g, every_s=self.objects_every, use_sam=self.use_sam)
+                self.state = "IDLE"
+                gc.collect(); gc.freeze()
+                self.steady_from = self.frames + 1
+            elif self.radius is None:
                 if robot is not None and self.g.robot_height is not None:
                     r = self.seg.measure_robot_radius(rect, self.valid, robot)
                     if r is not None:
@@ -183,7 +197,12 @@ class Pipeline:
         for (name, tm), (_, prev) in zip(marks[1:], marks):
             self.stage_ms[name].append(1000 * (tm - prev))
         goal_xy = None if self.goal_rc is None or self.planner is None else self.planner.cell_to_world([self.goal_rc])[0]
-        return {"tags": tags, "robot": robot, "rect": rect, "seg": seg_out, "plan": plan, "goal_xy": goal_xy, "lookahead": lookahead}
+        costmap = None
+        if self.planner is not None and self.planner.free is not None:
+            pl = self.planner
+            costmap = {"free": pl.free.copy(), "inflated": pl.inflated.copy(), "occupied": pl.occupied.copy(), "inside": pl.inside,
+                       "x0": pl.x0, "y1": pl.y1, "cell": pl.cell, "rows": pl.rows, "cols": pl.cols}
+        return {"tags": tags, "robot": robot, "rect": rect, "seg": seg_out, "plan": plan, "goal_xy": goal_xy, "lookahead": lookahead, "costmap": costmap}
 
     @staticmethod
     def lookahead(path_cm, dist_cm):
@@ -195,7 +214,7 @@ class Pipeline:
         free = None if self.planner is None or self.planner.free is None else 100 * self.planner.free[self.planner.inside].mean()
         return [f"state   {self.state}", "command none (no robot control yet)", f"loop    {hz:5.1f} Hz  tick {np.mean(self.tick_ms[-20:]) if self.tick_ms else 0:5.1f} ms",
                 f"robot.z std {s.get('z_std_cm', float('nan')):.3f} cm  (height {s.get('robot_height_cm') or 0:.1f})",
-                f"reproj  {s.get('reproj_px') or 0:.2f} px  solves {s.get('solves', 0)}",
+                f"pose    {s.get('source') or 'none'}  reproj {(s.get('reproj_px') if s.get('reproj_px') == s.get('reproj_px') else float('nan')) if s.get('reproj_px') is not None else float('nan'):.2f} px  solves {s.get('solves', 0)}",
                 f"tags    {sorted(tags)}  unexpected {s.get('unexpected_ids', 0)}",
                 f"board   {tuple(round(v, 1) for v in s['board_cm']) if s.get('board_cm') else '-'} cm  cam {s.get('camera_height_cm') or 0:.0f} cm",
                 f"robot r {self.radius or 0:.1f} cm   free {free if free is not None else 0:.0f} %",
@@ -228,6 +247,7 @@ def main(argv=None):
     ap.add_argument("--goal", type=float, nargs=2, metavar=("X", "Y"), help="goal in arena cm (default: picked automatically)")
     ap.add_argument("--summary", help="write the run summary as JSON here")
     ap.add_argument("--overlay-every", type=int, default=2, help="compose the overlay every N ticks (it costs ~15 ms)")
+    ap.add_argument("--robot-radius", type=float, help="cm, instead of measuring it at boot (a ruler beats a bad measurement)")
     ap.add_argument("--objects", action="store_true", help="also run Sean's object detector (vision/) as a second obstacle layer")
     ap.add_argument("--no-sam", action="store_true", help="object detector without MobileSAM (colour and parallax cues only)")
     ap.add_argument("--objects-every", type=float, default=4.0, help="seconds between object scans")
@@ -235,7 +255,7 @@ def main(argv=None):
     if not args.replay and not args.live:
         ap.error("--replay or --live is required")
     source = ReplaySource(args.replay, args.fast, args.loop) if args.replay else LiveSource(args.live, args.unit)
-    pipe = Pipeline(goal_xy=args.goal, objects=args.objects, use_sam=not args.no_sam, objects_every=args.objects_every)
+    pipe = Pipeline(goal_xy=args.goal, objects=args.objects, use_sam=not args.no_sam, objects_every=args.objects_every, robot_radius=args.robot_radius)
     writer = None
     last_wall, hz = time.perf_counter(), 0.0
     try:
@@ -243,17 +263,21 @@ def main(argv=None):
             item = source.next()
             if item is None:
                 break
-            frame, t, _ = item
-            out = pipe.tick(frame, t)
+            frame, t, rec = item
+            out = pipe.tick(frame, t, None if rec is None else rec.get("state"))
             now = time.perf_counter(); hz = 0.8 * hz + 0.2 / max(now - last_wall, 1e-6); last_wall = now
             if pipe.frames % max(1, args.overlay_every):
                 continue
             img = overlay.compose(frame, out["tags"], pipe.g, out["rect"], out["seg"], pipe.planner, out["plan"], out["robot"],
                                   out["goal_xy"], out["lookahead"], pipe.info(out["tags"], hz))
-            if args.record:
+            if args.record and pipe.g.frozen:            # the overlay only has its full size once calibrated
                 if writer is None:
-                    writer = cv2.VideoWriter(args.record, cv2.VideoWriter_fourcc(*"mp4v"), 15 / max(1, args.overlay_every), (img.shape[1], img.shape[0]))
-                writer.write(img)
+                    size = (img.shape[1], img.shape[0])
+                    writer = cv2.VideoWriter(args.record, cv2.VideoWriter_fourcc(*"mp4v"), 15 / max(1, args.overlay_every), size)
+                canvas = np.zeros((size[1], size[0], 3), np.uint8)
+                h, w = min(size[1], img.shape[0]), min(size[0], img.shape[1])
+                canvas[:h, :w] = img[:h, :w]
+                writer.write(canvas)
             if not args.headless:
                 cv2.imshow("nav", img)
                 if cv2.waitKey(1) & 0xFF == ord("q"):

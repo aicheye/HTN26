@@ -80,6 +80,7 @@ class Geometry:
         self.calib_waited = 0             # frames skipped waiting for a clean view of all four corner tags
         self.calib_missing = []           # corner tags the precise detector last failed to see
         self.rect = None                  # set by build_rectifier
+        self.source = None                # "tags" (calibrated here from all four corners) or "tracker" (pose taken from the Pi tracker)
 
     # --- detection ---------------------------------------------------------------------------------------
     def detect(self, gray, precise=False):
@@ -139,7 +140,7 @@ class Geometry:
         if not ok:
             return False
         err = self._reproj(obj, img, rvec, tvec)
-        if err >= self.reproj_err:
+        if self.reproj_err == self.reproj_err and err >= self.reproj_err:     # nan: pose came from the tracker, replace it
             return False
         self._set_pose(cv2.Rodrigues(rvec)[0], tvec.reshape(3), err)
         return True
@@ -225,8 +226,32 @@ class Geometry:
         self.board_cm = (float(self.polygon[:, 0].max() - self.polygon[:, 0].min()),
                          float(self.polygon[:, 1].max() - self.polygon[:, 1].min()))
         self._set_pose(R, tvec, err)
+        self.source = "tags"
         return True
 
+    def freeze_from_tracker(self, state):
+        """Fallback when the four corner tags are never all in view: take the Pi tracker's camera pose for
+        this frame (pi/API.md "camera": pixel = K (R p + t), floor frame origin at tag 1, x toward tag 2)
+        and its floor rectangle. The board size is then the tracker's argument, not derived, and the
+        summary says so. Returns True when adopted."""
+        cam = state.get("camera") if state else None
+        if not cam or not state.get("floor"):
+            return False
+        R = cv2.Rodrigues(np.array(cam["rvec"], dtype=np.float64))[0]
+        t = np.array(cam["tvec"], dtype=np.float64)
+        W, H = float(state["floor"][0]), float(state["floor"][1])
+        # the tracker's floor: tag centres at (0,0), (W,0), (W,H), (0,H); corner squares for the static-tag check
+        for i, (cx, cy) in zip(CORNER_IDS, ((0, 0), (W, 0), (W, H), (0, H))):
+            self.corner_world[i] = square(TAG_CM["corner"]) + [cx, cy, 0]
+            self.corner_centre[i] = (float(cx), float(cy))
+        self.polygon = np.array([self.corner_centre[i] for i in CORNER_IDS], dtype=np.float32)
+        self.board_cm = (W, H)
+        self.K = np.array([[cam["f"], 0, cam["cx"]], [0, cam["f"], cam["cy"]], [0, 0, 1]], dtype=np.float64)
+        img_pts = []; obj_pts = []
+        self._set_pose(R, t, float("nan"))
+        self.source = "tracker"
+        self.calib_missing = []
+        return True
     # --- conversions -------------------------------------------------------------------------------------
     def homography(self, height_cm=0.0):
         """World (X, Y) on the plane z = height -> pixel, as a 3x3 matrix."""
@@ -305,7 +330,7 @@ class Geometry:
         return p[:, :2]
 
     def summary(self):
-        return {"frozen": self.frozen, "reproj_px": self.reproj_err, "board_cm": self.board_cm,
+        return {"frozen": self.frozen, "source": self.source, "reproj_px": self.reproj_err, "board_cm": self.board_cm,
                 "camera_height_cm": None if self.C is None else float(self.C[2]),
                 "robot_height_cm": self.robot_height, "z_std_cm": self.z_std(), "solves": self.solves,
                 "unexpected_ids": self.unexpected_ids, "rejected": self.rejected, "calib_dropped": self.calib_dropped, "calib_waited": self.calib_waited}
