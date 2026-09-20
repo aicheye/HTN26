@@ -62,6 +62,17 @@ RETRIGGER_CM = 5.0      # auto mode: grip again once the Sesame is this far from
 RETRY_S = 6.0           # auto mode: after a refused plan, wait this long (or a moved Sesame) before trying again
 
 
+def measured_grip(frame_path):
+    """The grip offset measured by selfcal.py, if the frame file carries one."""
+    import json
+    try:
+        with open(frame_path) as f:
+            d = json.load(f)
+        return d["grip"] if d.get("measured") and d.get("grip") else None
+    except (OSError, KeyError, ValueError):
+        return None
+
+
 def auto_demo(obs, frame, args):
     """A grasp 'demo' built from the tag: the same record layout, so plan() treats it like a recorded one.
     Poses are placed around the tag as the tracker sees it now; plan() then re-places them around the same
@@ -69,13 +80,28 @@ def auto_demo(obs, frame, args):
     tag = frame.pose_to_base(obs["robot"])
     R = rot(tag["heading"])
     centre = np.array([tag["x"], tag["y"]])
-    along = args.grip_along
-    if args.hinge:                                          # two hinges, +-hinge along the heading: take the one nearer the arm
-        ends = [(np.linalg.norm(centre + R @ [h, args.grip_across]), h) for h in (args.hinge, -args.hinge)]
-        along += min(ends)[1]
-    gx, gy = centre + R @ [along, args.grip_across]
-    z_grip = (obs["robot"].get("z", 10.5) + args.grip_above_tag + 100 * TABLE_Z) / 100
-    jaw = (tag["heading"] + args.jaw_angle + 180) % 360 - 180
+    grip = getattr(args, "measured_grip", None)
+    if grip:
+        # measured by selfcal: when the jaws hold the hinge, the tag sits (along, left) cm from the gripper frame
+        # along the jaw axis, turned heading_offset. Invert it: jaws = tag heading - offset, gripper = tag - R(jaws) o.
+        jaw = (tag["heading"] - grip["heading_offset"] + 180) % 360 - 180
+        gx, gy = centre - rot(jaw) @ [grip["along"], grip["left"]]
+        # both hinges: selfcal measured one of them; the other is its mirror through the tag centre.
+        # take the one nearer the arm
+        gx2, gy2 = centre + rot(jaw) @ [grip["along"], grip["left"]]
+        if np.hypot(gx2, gy2) < np.hypot(gx, gy) - 0.5:
+            gx, gy = gx2, gy2
+            jaw = (jaw + 180 + 180) % 360 - 180
+        tag_above_gripper = grip.get("tag_height_cm", 10.5) - (grip.get("hold_z_cm", 9.5) - 100 * TABLE_Z)
+        z_grip = (obs["robot"].get("z", 10.5) - tag_above_gripper + 100 * TABLE_Z) / 100
+    else:
+        along = args.grip_along
+        if args.hinge:                                      # two hinges, +-hinge along the heading: take the one nearer the arm
+            ends = [(np.linalg.norm(centre + R @ [h, args.grip_across]), h) for h in (args.hinge, -args.hinge)]
+            along += min(ends)[1]
+        gx, gy = centre + R @ [along, args.grip_across]
+        z_grip = (obs["robot"].get("z", 10.5) + args.grip_above_tag + 100 * TABLE_Z) / 100
+        jaw = (tag["heading"] + args.jaw_angle + 180) % 360 - 180
     # the grip pitch: straight down when the arm reaches it, else tilted forward only as far as needed
     grip_pitch = next((pp for pp in GRIP_PITCHES if ik(gx / 100, gy / 100, z_grip, jaw, pp) is not None), None)
     if grip_pitch is None:
@@ -267,7 +293,12 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="plan only, never connect to the arm")
     args = ap.parse_args()
 
-    if args.demo == "auto":
+    args.measured_grip = measured_grip(args.frame) if args.demo == "auto" else None
+    if args.measured_grip:
+        g = args.measured_grip
+        demo = None
+        print(f"grasp from the tag with the MEASURED hinge offset: tag {g['along']:+.1f} cm along the jaw axis, {g['left']:+.1f} cm left of the jaws, turned {g['heading_offset']:+.0f} deg (selfcal)")
+    elif args.demo == "auto":
         demo = None
         print(f"grasp from the tag: the nearer hinge {args.hinge:.1f} cm from the centre along the heading{f' {args.grip_along:+.1f}' if args.grip_along else ''}, {args.grip_across:+.1f} cm across, {args.grip_above_tag:+.1f} cm above the tag, jaws at {args.jaw_angle:.0f} deg")
     else:
