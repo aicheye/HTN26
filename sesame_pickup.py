@@ -80,10 +80,16 @@ def auto_demo(obs, frame, args):
     grip_pitch = next((pp for pp in GRIP_PITCHES if ik(gx / 100, gy / 100, z_grip, jaw, pp) is not None), None)
     if grip_pitch is None:
         grip_pitch = -90.0                                  # let plan() report the unreachable grip
-    approach = min(-45.0, grip_pitch + 25.0)                # come in a little flatter than the grip, then straighten
-    steps = [(0.035, approach, GRIPPER_OPEN_AUTO), (0.025, approach + (grip_pitch - approach) * 0.3, GRIPPER_OPEN_AUTO),
-             (0.015, approach + (grip_pitch - approach) * 0.6, GRIPPER_OPEN_AUTO), (0.006, approach + (grip_pitch - approach) * 0.85, GRIPPER_OPEN_AUTO),
-             (0.0, grip_pitch, GRIPPER_OPEN_AUTO), (0.0, grip_pitch, GRIPPER_OPEN_AUTO * 0.5), (0.0, grip_pitch, 0.0), (0.0, grip_pitch, 0.0)]
+    approach = max(grip_pitch, min(-45.0, grip_pitch + 25.0))   # a little flatter than the grip, never steeper
+    def approach_steps(height):
+        return [(height, approach), (height * 0.7, approach + (grip_pitch - approach) * 0.3),
+                (height * 0.43, approach + (grip_pitch - approach) * 0.6), (height * 0.17, approach + (grip_pitch - approach) * 0.85)]
+    # the approach from 3.5 cm above; if the arm cannot reach that high out here, come in lower
+    for height in (0.035, 0.025, 0.015, 0.008, 0.0):
+        if all(ik(gx / 100, gy / 100, z_grip + dz, jaw, pp) is not None for dz, pp in approach_steps(height)):
+            break
+    steps = [(dz, pp, GRIPPER_OPEN_AUTO) for dz, pp in approach_steps(height)] + \
+            [(0.0, grip_pitch, GRIPPER_OPEN_AUTO), (0.0, grip_pitch, GRIPPER_OPEN_AUTO * 0.5), (0.0, grip_pitch, 0.0), (0.0, grip_pitch, 0.0)]
     samples, keyframes, t = [], [], 0.0
     for dz, pitch, grip in steps:
         pose = {"x": gx / 100, "y": gy / 100, "z": z_grip + dz, "pitch": pitch, "jaw_yaw": jaw}
