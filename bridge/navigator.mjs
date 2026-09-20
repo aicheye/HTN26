@@ -19,6 +19,13 @@ export const DEFAULT_MOTION = {
 
 const TURN_START = 0.45;        // start turning in place above this heading error
 const TURN_DONE = 0.1;          // a turn is finished when the predicted error is below this
+// While walking, a heading error is steered out by shortening one side's stride (gait.mjs), where the robot used to
+// walk on uncorrected up to TURN_START and then stop and turn in place. Full steer at STEER_FULL_AT, none below
+// STEER_DEADBAND, which is about the heading noise of the camera. A new value is only sent when it differs by
+// STEER_RESEND, so the robot is not sent a command on every frame.
+const STEER_FULL_AT = 0.35;
+const STEER_DEADBAND = 0.05;
+const STEER_RESEND = 0.2;
 const WAYPOINT_REACHED = 0.06;
 const GOAL_REACHED = 0.04;
 const REVERSE_ANGLE = 2.4;      // target is behind the robot
@@ -50,6 +57,7 @@ export class Navigator {
     // carry the robot to one of the drop points. Without both, a goto with no walkable path fails as before.
     this.arm = null;
     this.requestCarry = null;
+    this.steering = true;  // false: walk straight and correct the heading only by turning in place, as before
     // While set, the robot is walking here, to where the arm can reach it, and not yet to the goal.
     this.via = null;
     this.state = "idle";  // idle, navigating, recovering, calibrating, done, failed
@@ -107,11 +115,14 @@ export class Navigator {
     Object.assign(this, { state, detail, goal: null, path: [], drive: "" });
   }
 
-  setDrive(command, now = Date.now()) {
-    if (command === this.drive && now - this.sentAt < RESEND_MS) return;
+  // steer: -1 to 1 while walking forward, positive curves left. Hosts that cannot steer ignore it.
+  setDrive(command, now = Date.now(), steer = 0) {
+    const sameSteer = Math.abs(steer - (this.steer ?? 0)) < STEER_RESEND && (steer === 0) === ((this.steer ?? 0) === 0);
+    if (command === this.drive && sameSteer && now - this.sentAt < RESEND_MS) return;
     if (command !== this.drive) this.progress = null;
-    this.send(command);
+    this.send(command, steer);
     this.drive = command;
+    this.steer = steer;
     this.sentAt = now;
   }
 
@@ -182,7 +193,8 @@ export class Navigator {
     }
     if (behind) return this.setDrive("backward", now);
     if (Math.abs(error) > TURN_START) return this.setDrive(error > 0 ? "left" : "right", now);
-    this.setDrive("forward", now);
+    const steer = Math.abs(error) < STEER_DEADBAND ? 0 : Math.max(-1, Math.min(1, error / STEER_FULL_AT));
+    this.setDrive("forward", now, this.steering === false ? 0 : steer);
   }
 
   // The robot is stuck when a movement command has been active for a while and the camera sees no movement.

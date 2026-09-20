@@ -7,13 +7,15 @@ export type NavigatorStatus = {
   detail: string; recoveries: number; motion: Record<string, number>; command: string; waypoints: number; carries: number; via?: Point;
 };
 export class Navigator {
-  constructor(send: (command: string) => void, motion?: Record<string, number>);
+  /** steer: -1 to 1 while walking forward, positive curves left. */
+  constructor(send: (command: string, steer: number) => void, motion?: Record<string, number>);
   state: NavigatorStatus["state"];
   detail: string;
   goal: Point | null;
   path: Point[];
   via: Point | null;
   robotRadius: number | undefined;
+  steering: boolean;
   arm: { base: Point; reach: number } | null;
   requestCarry: ((goal: Point, drops: Point[]) => boolean) | null;
   status(): NavigatorStatus;

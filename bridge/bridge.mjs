@@ -67,7 +67,7 @@ let latestState = null;  // the state of the last 100 ms tick, for the edge chec
 // The robot's reach from its marker in metres, legs included. vision/scan.py measures it in the camera picture and
 // posts it to /robot. The obstacle clearance grows with it. The limit at the arena's edge is fixed (planner.mjs).
 let robotRadius = ROBOT_RADIUS_M;
-function move(command, face = {}) {
+function move(command, face = {}, steer = 0) {
   const robot = latestState?.robots[0];
   if (robot?.tracking && leavesArena(robot, latestState.arena, command)) {
     edgeStops++;
@@ -76,10 +76,10 @@ function move(command, face = {}) {
   }
   if (drive.mode !== "software") return sendToRobot({ command, ...face });
   if (Object.keys(face).length) sendToRobot(face);
-  gaitEngine.set(command);
+  gaitEngine.set(command, steer);  // the firmware's own gaits cannot steer, only the software gait can
   return robotSocket?.readyState === WebSocket.OPEN;
 }
-const navigator = new Navigator((command) => move(command), savedMotion);
+const navigator = new Navigator((command, steer) => move(command, {}, steer), savedMotion);
 // When goto finds no walkable path, the arm is asked to lift the robot to a place it can reach the goal from. The
 // request waits here for whatever drives the arm (arm_carry.py) to fetch it with GET /carry and answer it with
 // POST /carry. The arm's own planner decides whether it reaches a drop point, so several are offered, the ones

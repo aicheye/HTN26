@@ -68,7 +68,7 @@ export class GaitEngine {
   // sendServos: (servos object) => void. Call onRobotState() with every state message from the robot.
   constructor(sendServos, options = {}) {
     this.sendServos = sendServos;
-    this.options = { gait: "trot", trim: 0, frameDelay: 100, confirmTimeout: 300, subtrim: {}, ...options };
+    this.options = { gait: "trot", trim: 0, frameDelay: 100, confirmTimeout: 300, subtrim: {}, turnStrokes: "both", ...options };
     this.command = "";
     this.steer = 0;
     this.servos = {};
@@ -131,8 +131,12 @@ export class GaitEngine {
     this.running = true;
     while (this.command) {
       const command = this.command;
-      const gait = (this.options.gait === "firmware" ? FIRMWARE : TROT)[command];
+      let gait = (this.options.gait === "firmware" ? FIRMWARE : TROT)[command];
       if (!gait) break;
+      // A turn is two strokes, one by each diagonal pair of legs: lift, swing, lower, push. On the robot the first
+      // stroke turns it and the second does next to nothing (seen on 2026-09-20). turnStrokes "first" repeats only
+      // the first one: its four frames end where they start. The other pair stays down and is dragged round.
+      if (this.options.turnStrokes === "first" && (command === "left" || command === "right")) gait = { ...gait, cycle: gait.cycle.slice(0, 4) };
       const centres = hipCentres(gait), walking = command === "forward" || command === "backward";
       let first = true;
       while (this.command === command) {

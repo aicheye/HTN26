@@ -56,3 +56,28 @@ await wait(200);
 const swing = (hip) => { const a = sent.map((s) => s.pose[hip]).filter((v) => v !== undefined && v !== STAND[hip]); return Math.max(...a, STAND[hip]) - Math.min(...a, STAND[hip]); };
 assert.ok(swing("R1") < swing("L1") && Math.abs(swing("R1") / swing("L1") - 0.8) < 0.05, `right swing ${swing("R1")}, left swing ${swing("L1")}`);
 console.log(`PASS  trim 0.2 shortens the right stride: R1 swings ${swing("R1")} degrees, L1 swings ${swing("L1")}`);
+
+// Steering: positive curves left by shortening the left stride, and the right side keeps its full swing.
+({ engine, sent } = fakeRobot({ gait: "trot" }));
+engine.set("forward", 0.5);
+await wait(500);
+engine.set("stop");
+await wait(200);
+assert.ok(Math.abs(swing("L1") / swing("R1") - 0.7) < 0.05, `left swing ${swing("L1")}, right swing ${swing("R1")}`);
+console.log(`PASS  steer 0.5 shortens the left stride to 0.7: L1 swings ${swing("L1")} degrees, R1 swings ${swing("R1")}`);
+
+// turnStrokes "first": a left turn moves only the pair R1 + L2 and their knees, and the other pair stays down.
+({ engine, sent } = fakeRobot({ gait: "trot", turnStrokes: "first" }));
+engine.set("left");
+await wait(900);
+engine.set("stop");
+await wait(200);
+const moved = new Set(sent.slice(0, -1).flatMap((s) => Object.keys(s.pose)));
+assert.deepEqual([...moved].sort(), ["L2", "L4", "R1", "R3"]);
+({ engine, sent } = fakeRobot({ gait: "trot" }));
+engine.set("left");
+await wait(900);
+engine.set("stop");
+await wait(200);
+assert.ok(new Set(sent.slice(0, -1).flatMap((s) => Object.keys(s.pose))).has("R2"), "with both strokes the second pair moves too");
+console.log("PASS  turnStrokes first: only the first diagonal pair strokes, both: the second pair as well");

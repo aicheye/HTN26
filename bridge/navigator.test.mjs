@@ -6,26 +6,31 @@ const arena = { width: 0.76, length: 0.6 };
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
 // Simulated robot: commands take effect after `delay` ms, walking drifts by `veer` rad per metre.
-function simulate({ start, goal, obstacles = [], motion, robotModel = {}, blockedUntil = 0, maxSeconds = 120, calibrate = false }) {
-  const model = { walkSpeed: 0.045, turnRate: 0.55, veer: 0.6, delay: 350, ...robotModel };
+function simulate({ start, goal, obstacles = [], motion, robotModel = {}, blockedUntil = 0, maxSeconds = 120, calibrate = false, steering = true }) {
+  // steerCurve: how sharply full steer curves the walk, in rad per metre. 2.5 is a 0.4 m turning radius, a guess
+  // for a stride shortened to 0.4 on one side. It has not been measured on the robot.
+  const model = { walkSpeed: 0.045, turnRate: 0.55, veer: 0.6, delay: 350, steerCurve: 2.5, ...robotModel };
   const robot = { ...start, tracking: true };
   const queue = [], sent = [];
-  let active = "", now = 0, switches = 0, pending;
-  const navigator = new Navigator((command) => { sent.push(command); queue.push({ at: now + model.delay, command }); }, motion);
+  let active = "", activeSteer = 0, now = 0, switches = 0, pending, walked = 0;
+  const navigator = new Navigator((command, steer = 0) => { sent.push(command); queue.push({ at: now + model.delay, command, steer }); }, motion);
+  navigator.steering = steering;
   if (calibrate) pending = navigator.calibrate(4);
   else navigator.start(goal);
   for (; now < maxSeconds * 1000; now += 100) {
     while (queue.length && queue[0].at <= now) {
-      const command = queue.shift().command;
+      const { command, steer } = queue.shift();
       const next = command === "stop" ? "" : command;
       if (next !== active) switches++;
       active = next;
+      activeSteer = steer;
     }
     const free = now >= blockedUntil;
     if ((active === "forward" || active === "backward") && free) {
       const step = (active === "forward" ? 1 : -1) * model.walkSpeed * 0.1;
       robot.x += step * Math.cos(robot.yaw); robot.y += step * Math.sin(robot.yaw);
-      robot.yaw = wrap(robot.yaw + model.veer * Math.abs(step));
+      robot.yaw = wrap(robot.yaw + (model.veer + (active === "forward" ? activeSteer * model.steerCurve : 0)) * Math.abs(step));
+      walked += Math.abs(step);
     } else if ((active === "left" || active === "right") && free) {
       robot.yaw = wrap(robot.yaw + (active === "left" ? 1 : -1) * model.turnRate * 0.1);
     }
@@ -34,7 +39,7 @@ function simulate({ start, goal, obstacles = [], motion, robotModel = {}, blocke
     if (!calibrate && (navigator.state === "done" || navigator.state === "failed")) break;
     if (calibrate && navigator.state !== "calibrating") break;
   }
-  return { navigator, robot, seconds: now / 1000, switches, sent, pending };
+  return { navigator, robot, seconds: now / 1000, switches, sent, pending, walked };
 }
 
 // Starts and goals keep inside the 0.07 m limit at the edge (planner.mjs). A goal past it is moved.
@@ -99,3 +104,15 @@ const course = { start: { x: 0.15, y: 0.15, yaw: Math.PI }, goal: { x: 0.6, y: 0
 const average = (motion) => { let s = 0, t = 0; for (let i = 0; i < 20; i++) { const r = simulate({ ...course, motion }); s += r.switches; t += r.seconds; } return [s / 20, t / 20]; };
 const [s0, t0] = average(undefined), [s1, t1] = average(run.navigator.motion);
 console.log(`INFO  20 runs each: default values ${s0.toFixed(1)} gait changes, ${t0.toFixed(0)} s. calibrated ${s1.toFixed(1)} gait changes, ${t1.toFixed(0)} s`);
+
+// Does steering while walking pay off? The same course 20 times each way, on a robot that drifts 0.6 rad per metre.
+const compare = (steering) => { let s = 0, t = 0, w = 0, ok = 0; for (let i = 0; i < 20; i++) { const r = simulate({ ...course, steering }); s += r.switches; t += r.seconds; w += r.walked; ok += r.navigator.state === "done"; } return { switches: s / 20, seconds: t / 20, walked: w / 20, ok }; };
+const straight = compare(false), steered = compare(true);
+assert.equal(steered.ok, 20, "every steered run arrives");
+assert.ok(steered.switches < straight.switches, `steering needs fewer gait changes: ${steered.switches} against ${straight.switches}`);
+console.log(`PASS  steering while walking: ${steered.switches.toFixed(1)} gait changes and ${steered.seconds.toFixed(0)} s, against ${straight.switches.toFixed(1)} and ${straight.seconds.toFixed(0)} s when it only turns in place`);
+for (const steerCurve of [1, 5]) {
+  const runs = Array.from({ length: 10 }, () => simulate({ ...course, robotModel: { steerCurve } }));
+  assert.ok(runs.every((r) => r.navigator.state === "done"), `arrives when full steer curves ${steerCurve} rad per metre`);
+}
+console.log("PASS  steering still arrives when the robot curves 2.5 times less or 2 times more than assumed");
