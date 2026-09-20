@@ -101,24 +101,17 @@ def main():
         if subprocess.run([PY, "calibrate_arm_frame.py"]).returncode != 0:
             return 1
 
-    print("3. grasp demo: ", end="", flush=True)
+    print("3. grasp: ", end="", flush=True)
     demos = tracked_demos()
-    name = next((a for a in args if not a.startswith("-")), None)
-    if name and name not in demos:
-        print(f"'{name}' has no tracker pose at its grasp mark; recording it now (hold the arm)")
-        if subprocess.run([PY, "record_demo.py", name]).returncode != 0:
-            return 1
-    elif not demos:
-        print("none recorded with the tracker; recording 'grip' now (hold the arm)")
-        if subprocess.run([PY, "record_demo.py", "grip"]).returncode != 0:
-            return 1
-        name = "grip"
+    name = next((a for a in args if not a.startswith("-") and (a in demos or os.path.exists(f"demos/{a}.json"))), None)
+    if name:
+        print(f"recorded demo '{name}'")
     else:
-        name = name or demos[-1]
-        print(f"using '{name}'")
+        name = "auto"
+        print("from the tag geometry (no demo needed; record one with sh run.sh record NAME to use it instead)")
     rest = [a for a in args if a != name]
 
-    print(f"4. pickup with '{name}'" + (" now" if now else ": space = go, p = plan, q = quit"))
+    print(f"4. pickup ({name})" + (" now" if now else ": space = go, p = plan, q = quit"))
     cmd = [PY, "sesame_pickup.py", name] + rest + (["--once"] if now else [])
     return subprocess.run(cmd).returncode
 

@@ -1,8 +1,14 @@
 """Press a key: the arm finds the Sesame through the Pi tracker, grips it the demonstrated way, lifts it,
 carries it a short way to the side, sets it down, lets go and returns to its ready pose.
 
-Run: .venv/bin/python sesame_pickup.py DEMO [--tracker HOST] [--frame arm_frame.json] [--port PORT]
+Run: .venv/bin/python sesame_pickup.py [DEMO|auto] [--tracker HOST] [--frame arm_frame.json] [--port PORT]
+                                       [--grip-along 0] [--grip-across 0] [--grip-above-tag 0.7] [--jaw-angle 90]
                                        [--drop-offset DX DY | --drop X Y] [--lift 6] [--once] [--dry-run]
+
+With no demo (or "auto") the grasp is built from the tag itself: come down vertically onto the point
+--grip-along / --grip-across cm from the tag's centre (along its heading, and to its left), close the jaws
+--grip-above-tag cm above the tag's reported height, jaws at --jaw-angle to the heading (90 = across the
+body). Those are the numbers a recorded demo would supply; the defaults are the ones measured from one.
 
 Keys:  space / g  find the Sesame and run the whole pick-and-place
        p          plan only: print every phase and whether it is reachable, no motion
@@ -31,13 +37,13 @@ import time
 
 import numpy as np
 
-from arm_frame import ArmFrame
+from arm_frame import ArmFrame, rot
 from grasp_robot import grasp_segment, tag_pose_at, relative_offsets, place, solve, PRE_APPROACH_CM
 from record_demo import Keys
 from replay_demo import Arm, load, FPS
 from sesame_tracker import Tracker, Poller
 from so101_safe import default_port
-from so101_ik import JOINTS, ik
+from so101_ik import JOINTS, ik, fk, TABLE_Z
 
 HOLD_S = 0.6            # keep the demo running this long past the grasp mark (the jaws finish closing)
 LIFT_CM = 6.0
@@ -47,6 +53,30 @@ VERTICAL_CM_PER_S = 4.0
 RELEASE_S = 1.0
 DROP_CANDIDATES = [(0, 10), (0, -10), (0, 7), (0, -7), (-4, 8), (-4, -8), (-6, 0)]
 READY = {j: 0.0 for j in JOINTS}
+
+
+def auto_demo(obs, frame, args):
+    """A grasp 'demo' built from the tag: the same record layout, so plan() treats it like a recorded one.
+    Poses are placed around the tag as the tracker sees it now; plan() then re-places them around the same
+    pose, so the offsets are exactly the requested ones. Approach tilted, straightening for the grip."""
+    tag = frame.pose_to_base(obs["robot"])
+    R = rot(tag["heading"])
+    gx, gy = np.array([tag["x"], tag["y"]]) + R @ [args.grip_along, args.grip_across]
+    z_grip = (obs["robot"].get("z", 10.5) + args.grip_above_tag + 100 * TABLE_Z) / 100
+    jaw = (tag["heading"] + args.jaw_angle + 180) % 360 - 180
+    steps = [(0.035, -65, GRIPPER_OPEN_AUTO), (0.025, -72, GRIPPER_OPEN_AUTO), (0.015, -80, GRIPPER_OPEN_AUTO), (0.006, -87, GRIPPER_OPEN_AUTO), (0.0, -90, GRIPPER_OPEN_AUTO),
+             (0.0, -90, GRIPPER_OPEN_AUTO * 0.5), (0.0, -90, 0.0), (0.0, -90, 0.0)]
+    samples, keyframes, t = [], [], 0.0
+    for dz, pitch, grip in steps:
+        pose = {"x": gx / 100, "y": gy / 100, "z": z_grip + dz, "pitch": pitch, "jaw_yaw": jaw}
+        samples.append({"t": round(t, 3), "joints": {}, "gripper": grip, "pose": pose,
+                        "robot_floor": dict(obs["robot"]), "arm_floor": obs.get("arm")})
+        t += 0.5
+    keyframes.append({"t": samples[-2]["t"], "index": len(samples) - 2, "label": "grasp"})
+    return {"name": "auto", "samples": samples, "keyframes": keyframes, "auto": True}
+
+
+GRIPPER_OPEN_AUTO = 30.0
 
 
 def cartesian(p0, p1, seconds, t_start, gripper):
@@ -97,6 +127,8 @@ def pick_drop(pick, args):
 
 def plan(demo, frame0, obs, args):
     """All phases as one trajectory [(t, joints, gripper)], or (None, reason)."""
+    if demo is None or demo.get("auto"):
+        demo = auto_demo(obs, frame0.adjusted_for_arm_tag(obs["arm"]), args)
     samples, grasp, release = grasp_segment(demo, args.approach, 0.0)
     samples = [s for s in samples if s["t"] <= grasp["t"] + HOLD_S]
     tag_demo_floor = tag_pose_at(grasp, demo)
@@ -175,7 +207,11 @@ def execute(arm, traj, speed=1.0):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("demo")
+    ap.add_argument("demo", nargs="?", default="auto", help="a recorded demo name, or 'auto' (default) to grip from the tag geometry")
+    ap.add_argument("--grip-along", type=float, default=0.0, help="cm from the tag centre along its heading to the grip point")
+    ap.add_argument("--grip-across", type=float, default=0.0, help="cm to the tag's left")
+    ap.add_argument("--grip-above-tag", type=float, default=0.7, help="jaws close this many cm above the tag's reported height")
+    ap.add_argument("--jaw-angle", type=float, default=90.0, help="jaw axis relative to the tag heading; 90 = across the body")
     ap.add_argument("--tracker"); ap.add_argument("--frame", default="arm_frame.json"); ap.add_argument("--port", default=default_port(), help="arm serial port (default: the USB serial device found, or $SO101_PORT)")
     ap.add_argument("--drop-offset", type=float, nargs=2, metavar=("DX", "DY"), help="cm from the pick point, base frame")
     ap.add_argument("--drop", type=float, nargs=2, metavar=("X", "Y"), help="absolute base-frame cm")
@@ -185,10 +221,14 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="plan only, never connect to the arm")
     args = ap.parse_args()
 
-    try:
-        demo = load(args.demo)
-    except FileNotFoundError:
-        print(f"no demo '{args.demo}': record one with record_demo.py (with the tracker running)"); return 1
+    if args.demo == "auto":
+        demo = None
+        print(f"grasp from the tag: {args.grip_along:+.1f} cm along, {args.grip_across:+.1f} cm across, {args.grip_above_tag:+.1f} cm above the tag, jaws at {args.jaw_angle:.0f} deg")
+    else:
+        try:
+            demo = load(args.demo)
+        except FileNotFoundError:
+            print(f"no demo '{args.demo}': record one with record_demo.py, or run without a name to grip from the tag geometry"); return 1
     if not os.path.exists(args.frame):
         print(f"{args.frame} not found: run calibrate_arm_frame.py first (fingertips on the Sesame's tag, 3 placements)"); return 1
     frame0 = ArmFrame.load(args.frame)
