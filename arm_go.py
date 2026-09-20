@@ -81,6 +81,15 @@ def main():
                 print(f"   still starting ({i + 1} s)... {tail}")
         if not up:
             print("no tracker answered in 4 minutes. Check pi/trackers-live.log and the WiFi."); return 1
+    # focus: the QNX camera driver has no autofocus; the tracker sets the lens from a code saved on the Pi by
+    # pi/run-focus.sh and prints "lens code N ...: set" at startup. Warn when a camera started without one.
+    try:
+        log = open("pi/trackers-live.log").read()
+        for u in up:
+            if f"[cam{u}] lens code" not in log:
+                print(f"WARNING: camera {u} started with NO lens code (focus not set). Run once, aimed at the board:  sh pi/run-focus.sh {u}")
+    except OSError:
+        pass
     # the camera page first, always: orient the camera so all four corner tags and the Sesame's tag are in view
     print(f"camera view (cameras up: {up}). Orient the camera: 4 corner tags in view, then the Sesame.")
     open_camera_page(tracker.host, units=up)
