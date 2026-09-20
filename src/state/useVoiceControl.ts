@@ -73,6 +73,7 @@ export function useVoiceControl(snapshot: () => VoiceSnapshot, wsUrl: string, so
   }, [cancelVoice, submit, setVoicePhase]);
 
   const finishListening = useCallback(() => recording.current?.finish(), []);
+  const getVoiceAnalyser = useCallback(() => recording.current?.analyser ?? null, []);
 
   useEffect(() => {
     const onHidden = () => { if (document.hidden) cancelVoice(); };
@@ -99,5 +100,5 @@ export function useVoiceControl(snapshot: () => VoiceSnapshot, wsUrl: string, so
     };
   }, [cancelVoice, executor]);
 
-  return { voiceSupported, voicePhase, voiceMessage, voiceError, startListening, finishListening, cancelVoice };
+  return { voiceSupported, voicePhase, voiceMessage, voiceError, startListening, finishListening, cancelVoice, getVoiceAnalyser };
 }

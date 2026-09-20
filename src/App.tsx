@@ -7,6 +7,8 @@ import { CommandLog, Telemetry } from "./components/StatusPanel";
 import { useWorld } from "./state/StateProvider";
 import { VoiceControls } from "./components/VoiceControls";
 import { PanelSection } from "./components/PanelSection";
+import { TitleScreen } from "./components/TitleScreen";
+import { BlurredBackdrop } from "./components/BlurredBackdrop";
 import { CameraFeed } from "./components/CameraFeed";
 import { DEFAULT_CAMERA_URL } from "./state/cameraFeed";
 import { makeMockScenario } from "./data/mockScenarios";
@@ -27,6 +29,7 @@ export default function App() {
     send,
     cancelVoice,
   } = useWorld();
+  const [started, setStarted] = useState(false);
   const [mainView, setMainView] = useState<Renderer>("3d");
   const [cameraUrl, setCameraUrl] = useState<string | null>(null);
   const feedUrl = cameraUrl ?? state?.cameraFeedUrl ?? DEFAULT_CAMERA_URL;
@@ -40,7 +43,8 @@ export default function App() {
   const visible = SECTIONS.filter((s) => s.id !== "raw" || showDebug);
 
   return (
-    <div className="flex h-full">
+    <div className="relative flex h-full">
+      <TitleScreen onStart={() => setStarted(true)} />
       <nav className="relative z-10 flex w-12 shrink-0 flex-col items-center gap-1 border-r border-zinc-800 bg-zinc-950 py-2">
         {visible.map((s) => (
           <button
@@ -63,9 +67,11 @@ export default function App() {
         ))}
       </nav>
 
+      {/* Overlays the map rather than resizing it, so the canvas never has to change size. */}
       <aside
-        className={`relative z-10 min-w-0 shrink-0 overflow-hidden border-r bg-zinc-900 transition-[width] duration-200 ${
-          section ? "w-64 border-zinc-800" : "w-0 border-transparent"
+        aria-hidden={!section}
+        className={`absolute bottom-0 left-12 top-0 z-10 w-64 border-r border-zinc-800 bg-zinc-900 transition-[transform,visibility] duration-200 ${
+          section ? "visible translate-x-0" : "invisible -translate-x-full"
         }`}
       >
         <div className="flex h-full w-64 flex-col">
@@ -192,7 +198,7 @@ export default function App() {
       </aside>
 
       <section className="relative min-w-0 flex-1 overflow-hidden bg-zinc-950">
-        {section === "camera" ? <CameraFeed url={feedUrl} /> : state && hasArena(state) ? (
+        {!started ? null : section === "camera" ? <div className="h-full pl-64"><CameraFeed url={feedUrl} /></div> : state && hasArena(state) ? (
           <>
             <MapView
               renderer={mainView}
@@ -345,10 +351,7 @@ const BACKDROP: WorldState = (() => {
 function EmptyStage({ title, detail }: { title: string; detail?: string }) {
   return (
     <div className="relative h-full w-full overflow-hidden">
-      <div aria-hidden className="pointer-events-none absolute -inset-6 opacity-70 blur-md">
-        <MapView renderer="3d" state={BACKDROP} selectedRobotId={null} compact />
-      </div>
-      <div className="absolute inset-0 bg-zinc-950/50" />
+      <BlurredBackdrop state={BACKDROP} />
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-8 text-center">
         <p className="text-base font-medium text-zinc-100">{title}</p>
         {detail && <p className="max-w-xs text-sm leading-relaxed text-zinc-400">{detail}</p>}

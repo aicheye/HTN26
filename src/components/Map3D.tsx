@@ -42,6 +42,7 @@ export function Map3D({
   state,
   showCameraLayer = false,
   compact = false,
+  orbit = false,
   onPickGoal,
 }: MapProps) {
   const { width, length } = state.arena;
@@ -119,6 +120,7 @@ export function Map3D({
           robot={robot}
           view={view}
           compact={compact}
+          orbit={orbit}
           onUserTakeOver={() => setView((v) => (v === "follow" ? v : "free"))}
         />
       </Canvas>
@@ -160,12 +162,14 @@ function CameraRig({
   robot,
   view,
   compact,
+  orbit,
   onUserTakeOver,
 }: {
   arena: Arena;
   robot: Robot | undefined;
   view: ViewMode;
   compact: boolean;
+  orbit: boolean;
   onUserTakeOver: () => void;
 }) {
   const camera = useThree((s) => s.camera);
@@ -177,6 +181,7 @@ function CameraRig({
   const span = Math.max(arena.width + 2 * tableBorder(arena), arena.length + 2 * tableBorder(arena), ARM_MAX_REACH * 1.3)
     * Math.max(1, size.height / Math.max(size.width, 1));
   const desired = useRef<{ pos: THREE.Vector3; target: THREE.Vector3 } | null>(null);
+  const orbitAngle = useRef(0);
 
   useEffect(() => {
     if (!controls) return;
@@ -209,6 +214,17 @@ function CameraRig({
     const center = new THREE.Vector3(arena.width / 2, 0, -arena.length / 2);
 
     // the thumbnail has no controls to aim the camera, so frame it directly
+    if (compact && orbit) {
+      orbitAngle.current += dt * ORBIT_RAD_PER_S;
+      const radius = span * 1.35;
+      camera.position.set(
+        center.x + Math.sin(orbitAngle.current) * radius * Math.cos(ORBIT_ELEVATION),
+        radius * Math.sin(ORBIT_ELEVATION),
+        center.z + Math.cos(orbitAngle.current) * radius * Math.cos(ORBIT_ELEVATION),
+      );
+      camera.lookAt(center);
+      return;
+    }
     if (compact) {
       camera.position.set(center.x, span * 0.95, center.z + span * 1.05);
       camera.lookAt(center);
@@ -240,6 +256,9 @@ function CameraRig({
 
   return null;
 }
+
+const ORBIT_ELEVATION = (30 * Math.PI) / 180;
+const ORBIT_RAD_PER_S = 0.14; // one lap every ~45 s
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));

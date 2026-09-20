@@ -113,7 +113,7 @@ export function ControlPad() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="flex justify-center">
         <button
           type="button"
           onClick={() => {
@@ -121,16 +121,19 @@ export function ControlPad() {
             setActive(null);
             send("stop");
           }}
-          className="flex h-9 items-center justify-center gap-2 rounded-md bg-red-600 text-sm font-medium text-white transition-colors hover:bg-red-500"
+          className="flex h-11 w-[140px] items-center justify-center gap-2 rounded-md border border-zinc-700/80 bg-zinc-800/60 text-sm text-zinc-300 transition-colors hover:border-zinc-600 hover:bg-zinc-800 active:bg-zinc-100 active:text-zinc-900"
         >
           Stop
-          <kbd className="font-sans text-[10px] font-normal opacity-70">Space</kbd>
+          <kbd className="font-sans text-[9px] leading-none opacity-40">Space</kbd>
         </button>
+      </div>
+
+      <div className="space-y-1">
         <button
           type="button"
           aria-expanded={posesOpen}
           onClick={() => setPosesOpen((v) => !v)}
-          className="flex h-9 items-center justify-center gap-1.5 rounded-md border border-zinc-700/80 text-sm text-zinc-300 transition-colors hover:bg-zinc-800"
+          className="flex h-9 w-full items-center justify-center gap-1.5 rounded-md border border-zinc-700/80 text-sm text-zinc-300 transition-colors hover:bg-zinc-800"
         >
           Poses
           <svg viewBox="0 0 12 12" className={`h-3 w-3 text-zinc-500 transition-transform ${posesOpen ? "rotate-180" : ""}`} aria-hidden>
@@ -138,7 +141,7 @@ export function ControlPad() {
           </svg>
         </button>
         {posesOpen && (
-          <div className="col-span-2 grid grid-cols-3 gap-1">
+          <div className="grid grid-cols-3 gap-1">
             {POSES.map((pose) => (
               <button
                 key={pose}
