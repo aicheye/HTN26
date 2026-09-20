@@ -30,11 +30,14 @@ def default_host():
 
 
 class Tracker:
+    HOLD_S = 3.0     # a sighting counts for this long: a small tag is missed in many frames while standing still
+
     def __init__(self, host=None, units=(3, 4), timeout=1.5):
         self.host = host or default_host()
         self.units = tuple(units)
         self.timeout = timeout
         self.last = {}
+        self.last_seen = {}      # unit -> (time, observation) of the last frame that had the robot
 
     def state(self, unit):
         """The raw tracker state of one camera, or None if it cannot be reached."""
@@ -52,19 +55,26 @@ class Tracker:
         """Best current observation: {"robot": {x, y, z, heading}, "arm": {...} or None, "zUp", "unit",
         "floorMarkers", "floor"}. Prefers the camera that sees the robot with the most floor markers."""
         best = None
+        now = time.time()
         for unit in self.units:
             s = self.state(unit)
-            if not s or not s.get("calibrated") or not s.get("robot") or "x" not in s["robot"]:
+            if not s or not s.get("calibrated"):
                 continue
-            key = (s.get("floorMarkers", 0), 1 if s.get("arm") else 0)
+            if s.get("robot") and "x" in s["robot"]:
+                obs = {"robot": {k: s["robot"][k] for k in ("x", "y", "z", "heading")},
+                       "arm": None if not s.get("arm") or "x" not in s["arm"] else {k: s["arm"][k] for k in ("x", "y", "z", "heading")},
+                       "zUp": s.get("zUp", True), "unit": unit, "floorMarkers": s.get("floorMarkers", 0), "floor": s.get("floor"), "age": 0.0}
+                self.last_seen[unit] = (now, obs)
+            elif unit in self.last_seen and now - self.last_seen[unit][0] <= self.HOLD_S:
+                obs = dict(self.last_seen[unit][1]); obs["age"] = now - self.last_seen[unit][0]
+                if s.get("arm") and "x" in s["arm"]:                       # the arm tag is usually seen; keep it fresh
+                    obs["arm"] = {k: s["arm"][k] for k in ("x", "y", "z", "heading")}
+            else:
+                continue
+            key = (obs["age"] == 0.0, obs["floorMarkers"], 1 if obs["arm"] else 0)
             if best is None or key > best[0]:
-                best = (key, s)
-        if best is None:
-            return None
-        s = best[1]
-        return {"robot": {k: s["robot"][k] for k in ("x", "y", "z", "heading")},
-                "arm": None if not s.get("arm") or "x" not in s["arm"] else {k: s["arm"][k] for k in ("x", "y", "z", "heading")},
-                "zUp": s.get("zUp", True), "unit": s["unit"], "floorMarkers": s.get("floorMarkers", 0), "floor": s.get("floor")}
+                best = (key, obs)
+        return None if best is None else best[1]
 
     def observe_steady(self, seconds=1.0, period=0.15):
         """Median of the observations over a short window (position and heading), for a pose to act on."""
