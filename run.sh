@@ -12,6 +12,7 @@
 #   sh run.sh frame --offset A L the same transform from the arm base tag (id 5) and a ruler: no hands-on step
 #   sh run.sh selfcal            measured frame AND hinge offset: the arm holds the Sesame by its hinge and moves it (what go uses)
 #   sh run.sh record NAME        guide the grasp by hand with the tracker running -> demos/NAME.json
+#   sh run.sh anchor NAME        give a demo recorded without the tracker its tag pose (Sesame unmoved since)
 #   sh run.sh pickup NAME        p = plan, space = find the Sesame, grip, lift, carry, set down, release
 #   sh run.sh replay NAME        play a demo back where it was recorded
 #   sh run.sh arm                ping the motors;  sh run.sh arm --halfway  moves to the midpoint and back
@@ -52,6 +53,7 @@ case "$cmd" in
   frame)     ensure_env; "$PY" frame_from_arm_tag.py "$@" ;;
   selfcal)   ensure_env; "$PY" selfcal.py "$@" ;;
   record)    ensure_env; "$PY" record_demo.py "$@" ;;
+  anchor)    ensure_env; "$PY" anchor_demo.py "$@" ;;
   pickup)    ensure_env; "$PY" sesame_pickup.py "$@" ;;
   grasp)     ensure_env; "$PY" grasp_robot.py "$@" ;;
   replay)    ensure_env; "$PY" replay_demo.py "$@" ;;
