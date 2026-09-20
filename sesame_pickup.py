@@ -10,6 +10,12 @@ With no demo (or "auto") the grasp is built from the tag itself: come down verti
 --grip-above-tag cm above the tag's reported height, jaws at --jaw-angle to the heading (90 = across the
 body). Those are the numbers a recorded demo would supply; the defaults are the ones measured from one.
 
+Correction loop (auto mode): after each attempt the camera says whether the Sesame's tag moved with the
+gripper. If it did not, the grip missed: the arm returns to zero, the target is shifted by the next trial
+offset (closer, further, left, right, in cm) and it tries again; the offset that works is kept in
+grip_correction.json and used from then on. Keys c / f / l / r nudge the target 1 cm closer / further /
+left / right by hand between attempts (also kept), 0 clears it.
+
 --auto (what sh run.sh go uses): no keypress. Whenever a camera sees the Sesame within reach, the arm grips
 it, carries it aside, sets it down and returns; then it waits until the Sesame is seen somewhere else
 (more than RETRIGGER_CM from where it was set down) before going again. q still quits.
@@ -35,6 +41,7 @@ Phases, all solved through so101_ik.ik and checked before the first move:
   retract   straight up, then a slow joint-space slew to the ready pose
 """
 import argparse
+import json
 import os
 import sys
 import time
@@ -59,7 +66,24 @@ RELEASE_S = 1.0
 DROP_CANDIDATES = [(0, 10), (0, -10), (0, 7), (0, -7), (-4, 8), (-4, -8), (-6, 0), (-3, 4), (-3, -4), (0, 0)]   # (0, 0): set it back down in place
 READY = {j: 0.0 for j in JOINTS}
 RETRIGGER_CM = 5.0      # auto mode: grip again once the Sesame is this far from where it was last set down
+CORRECTION_FILE = "grip_correction.json"
+TRIALS = [(0, 0), (-2, 0), (2, 0), (0, 2), (0, -2), (-4, 0), (4, 0), (-2, 2), (-2, -2), (2, 2), (2, -2)]   # ahead, left (cm) relative to the kept correction
+MOVED_CM = 5.0          # the Sesame's tag must move at least this far during the carry for the grip to count
 RETRY_S = 6.0           # auto mode: after a refused plan, wait this long (or a moved Sesame) before trying again
+
+
+def load_correction():
+    try:
+        with open(CORRECTION_FILE) as f:
+            d = json.load(f)
+        return {"ahead": float(d.get("ahead", 0.0)), "left": float(d.get("left", 0.0))}
+    except (OSError, ValueError):
+        return {"ahead": 0.0, "left": 0.0}
+
+
+def save_correction(c):
+    with open(CORRECTION_FILE, "w") as f:
+        json.dump({**c, "note": "cm added to every grip target in the arm's base frame: ahead = +x, left = +y"}, f, indent=1)
 
 
 def measured_grip(frame_path):
@@ -102,6 +126,8 @@ def auto_demo(obs, frame, args):
         gx, gy = centre + R @ [along, args.grip_across]
         z_grip = (obs["robot"].get("z", 10.5) + args.grip_above_tag + 100 * TABLE_Z) / 100
         jaw = (tag["heading"] + args.jaw_angle + 180) % 360 - 180
+    corr = getattr(args, "correction", None) or {"ahead": 0.0, "left": 0.0}
+    gx, gy = gx + corr["ahead"], gy + corr["left"]          # the kept correction plus this attempt's trial shift
     # the grip pitch: straight down when the arm reaches it, else tilted forward only as far as needed
     grip_pitch = next((pp for pp in GRIP_PITCHES if ik(gx / 100, gy / 100, z_grip, jaw, pp) is not None), None)
     if grip_pitch is None:
@@ -290,6 +316,7 @@ def main():
     ap.add_argument("--squeeze", type=float, default=8.0); ap.add_argument("--speed", type=float, default=1.0)
     ap.add_argument("--once", action="store_true", help="run once without the key loop")
     ap.add_argument("--auto", action="store_true", help="grip whenever the Sesame is seen, no keypress; q quits")
+    ap.add_argument("--no-check", action="store_true", help="do not judge the grip by whether the tag moved")
     ap.add_argument("--dry-run", action="store_true", help="plan only, never connect to the arm")
     args = ap.parse_args()
 
@@ -330,7 +357,8 @@ def main():
         print("\n".join(info["report"]))
         if dry or arm is None:
             return True
-        print("  running")
+        before = (obs["robot"]["x"], obs["robot"]["y"])
+        print(f"  running (target correction: {args.correction['ahead']:+.1f} ahead, {args.correction['left']:+.1f} left)")
         try:
             execute(arm, traj, args.speed)
         except Exception as e:                      # a refused or failed move mid-way: still go back to zero
@@ -340,18 +368,42 @@ def main():
             return False
         print("  back to zero")
         arm.slew(READY, traj[-1][2])
+        if not args.no_check:
+            after = tracker.wait_for_robot(15.0, say=None)
+            if after is None:
+                print("  cannot tell whether the grip worked: the tag was not seen after the carry")
+            else:
+                moved = np.hypot(after["robot"]["x"] - before[0], after["robot"]["y"] - before[1])
+                if moved >= MOVED_CM:
+                    print(f"  GRIP WORKED: the Sesame moved {moved:.1f} cm with the gripper. Keeping the correction.")
+                    save_correction(args.correction)
+                    args.trial_index = 0
+                else:
+                    print(f"  GRIP MISSED: the Sesame moved only {moved:.1f} cm.")
+                    if args.auto and args.trial_index < len(TRIALS) - 1:
+                        args.trial_index += 1
+                        da, dl = TRIALS[args.trial_index]
+                        base = load_correction()
+                        args.correction = {"ahead": base["ahead"] + da, "left": base["left"] + dl}
+                        print(f"  next attempt with the target {da:+.0f} cm ahead, {dl:+.0f} cm left of the kept correction")
+                        last["drop_floor"] = None           # try again right away, without waiting for the Sesame to move
+                    return False
         frame_now = frame0.adjusted_for_arm_tag(obs["arm"])
         last["drop_floor"] = tuple(frame_now.to_floor([[100 * info["drop"]["x"], 100 * info["drop"]["y"]]])[0])
         print("  done; waiting for the Sesame to be seen somewhere new")
         return True
 
+    args.correction = load_correction(); args.trial_index = 0
     if args.once or args.dry_run:
         ok = run(args.dry_run)
         if arm: arm.close(False)
         return 0 if ok else 1
 
+    args.correction = load_correction()
+    args.trial_index = 0
+    print(f"grip target correction: {args.correction['ahead']:+.1f} cm ahead, {args.correction['left']:+.1f} cm left  (c/f/l/r nudge 1 cm, 0 clears)")
     if args.auto:
-        print("AUTO: the arm grips the Sesame whenever a camera sees it in reach. q = quit, p = plan only, z = ready pose")
+        print("AUTO: the arm grips the Sesame whenever a camera sees it in reach; a missed grip is retried with a shifted target. q = quit, p = plan, z = ready pose")
     else:
         print("space/g = pick up and move the Sesame   p = plan only   z = ready pose   o = open gripper   q = quit")
     keys = Keys()
@@ -369,6 +421,14 @@ def main():
                     if moved_since_drop and not refused_recently:
                         print(f"\n  Sesame seen at floor ({here[0]:.1f}, {here[1]:.1f}): gripping")
                         run(False, tracker.observe_steady(1.0) or o)
+            if key in ("c", "f", "l", "r", "0"):
+                if key == "0":
+                    args.correction = {"ahead": 0.0, "left": 0.0}
+                else:
+                    da, dl = {"c": (-1, 0), "f": (1, 0), "l": (0, 1), "r": (0, -1)}[key]
+                    args.correction = {"ahead": args.correction["ahead"] + da, "left": args.correction["left"] + dl}
+                save_correction(args.correction); args.trial_index = 0; last["drop_floor"] = None
+                print(f"\n  correction now {args.correction['ahead']:+.1f} cm ahead, {args.correction['left']:+.1f} cm left (kept)")
             if key in (" ", "g"):
                 run(False)
             elif key == "p":
