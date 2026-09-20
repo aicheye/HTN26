@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { Menu } from "./Disclosure";
 import { useWorld } from "../state/StateProvider";
 import { POSES, type CommandType } from "../types/world";
 
@@ -17,6 +16,7 @@ const KEY_MAP: Record<string, CommandType> = {
 export function ControlPad() {
   const { send } = useWorld();
   const [active, setActive] = useState<CommandType | null>(null);
+  const [posesOpen, setPosesOpen] = useState(false);
   const activeRef = useRef<CommandType | null>(null);
 
   const press = (type: CommandType) => {
@@ -89,31 +89,31 @@ export function ControlPad() {
       onPointerUp={release}
       onPointerCancel={release}
       onPointerLeave={release}
-      className={`relative flex h-10 w-10 items-center justify-center rounded-md border transition select-none ${
+      className={`relative flex h-11 w-11 items-center justify-center rounded-md border transition-colors select-none ${
         active === type
-          ? "border-zinc-100 bg-zinc-100 text-zinc-900 shadow-inner"
-          : "border-zinc-700 bg-zinc-800 text-zinc-200 shadow-[0_1px_0_rgba(255,255,255,0.04),0_2px_4px_rgba(0,0,0,0.3)] hover:bg-zinc-700"
+          ? "border-zinc-100 bg-zinc-100 text-zinc-900"
+          : "border-zinc-700/80 bg-zinc-800/60 text-zinc-300 hover:border-zinc-600 hover:bg-zinc-800"
       }`}
     >
       <ArrowIcon rotation={rotation} />
-      <span className="absolute bottom-0.5 right-1 text-[9px] font-medium opacity-50">
+      <span className="absolute bottom-0.5 right-1 text-[9px] leading-none opacity-40">
         {cap}
       </span>
     </button>
   );
 
   return (
-    <div className="flex flex-col items-center gap-2">
-      <div className="flex flex-col items-center gap-1.5">
+    <div className="space-y-3">
+      <div className="flex flex-col items-center gap-1">
         {key("forward", 0, "W")}
-        <div className="flex gap-1.5">
+        <div className="flex gap-1">
           {key("left", -90, "A")}
           {key("backward", 180, "S")}
           {key("right", 90, "D")}
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
           onClick={() => {
@@ -121,26 +121,36 @@ export function ControlPad() {
             setActive(null);
             send("stop");
           }}
-          className="h-8 rounded-md bg-red-600 px-4 text-sm font-semibold text-white shadow-[0_2px_6px_rgba(220,38,38,0.35)] transition hover:bg-red-700"
+          className="flex h-9 items-center justify-center gap-2 rounded-md bg-red-600 text-sm font-medium text-white transition-colors hover:bg-red-500"
         >
           Stop
-          <span className="ml-1.5 text-[10px] font-normal opacity-70">Space</span>
+          <kbd className="font-sans text-[10px] font-normal opacity-70">Space</kbd>
         </button>
-
-        <Menu label="Poses">
-          <div className="flex flex-wrap gap-1">
+        <button
+          type="button"
+          aria-expanded={posesOpen}
+          onClick={() => setPosesOpen((v) => !v)}
+          className="flex h-9 items-center justify-center gap-1.5 rounded-md border border-zinc-700/80 text-sm text-zinc-300 transition-colors hover:bg-zinc-800"
+        >
+          Poses
+          <svg viewBox="0 0 12 12" className={`h-3 w-3 text-zinc-500 transition-transform ${posesOpen ? "rotate-180" : ""}`} aria-hidden>
+            <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </button>
+        {posesOpen && (
+          <div className="col-span-2 grid grid-cols-3 gap-1">
             {POSES.map((pose) => (
               <button
                 key={pose}
                 type="button"
                 onClick={() => send("pose", { pose })}
-                className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+                className="truncate rounded-md border border-zinc-700/80 px-1.5 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800"
               >
                 {pose}
               </button>
             ))}
           </div>
-        </Menu>
+        )}
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ import { MapView, type Renderer } from "./components/MapView";
 import { CommandLog, Telemetry } from "./components/StatusPanel";
 import { useWorld } from "./state/StateProvider";
 import { VoiceControls } from "./components/VoiceControls";
+import { PanelSection } from "./components/PanelSection";
 import { CameraFeed } from "./components/CameraFeed";
 import { DEFAULT_CAMERA_URL } from "./state/cameraFeed";
 
@@ -38,7 +39,7 @@ export default function App() {
 
   return (
     <div className="flex h-full">
-      <nav className="relative z-10 flex w-12 shrink-0 flex-col items-center gap-1 border-r border-zinc-800/60 bg-zinc-950 py-2 shadow-[4px_0_16px_rgba(0,0,0,0.35)]">
+      <nav className="relative z-10 flex w-12 shrink-0 flex-col items-center gap-1 border-r border-zinc-800 bg-zinc-950 py-2">
         {visible.map((s) => (
           <button
             key={s.id}
@@ -51,7 +52,7 @@ export default function App() {
               s.id === "settings" ? "mt-auto" : ""
             } ${
               section === s.id
-                ? "bg-zinc-100 text-zinc-900 shadow-md"
+                ? "bg-zinc-800 text-zinc-100"
                 : "text-zinc-500 hover:bg-zinc-800/80 hover:text-zinc-200"
             }`}
           >
@@ -61,13 +62,13 @@ export default function App() {
       </nav>
 
       <aside
-        className={`relative z-10 min-w-0 shrink-0 overflow-hidden border-r bg-zinc-900 shadow-[6px_0_24px_rgba(0,0,0,0.4)] transition-[width] duration-200 ${
-          section ? "w-64 border-zinc-800/60" : "w-0 border-transparent shadow-none"
+        className={`relative z-10 min-w-0 shrink-0 overflow-hidden border-r bg-zinc-900 transition-[width] duration-200 ${
+          section ? "w-64 border-zinc-800" : "w-0 border-transparent"
         }`}
       >
         <div className="flex h-full w-64 flex-col">
-          <div className="flex items-center justify-between border-b border-zinc-800/60 bg-zinc-900/95 px-4 py-2.5 backdrop-blur-sm">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
+          <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2.5">
+            <h2 className="text-sm font-medium text-zinc-200">
               {SECTIONS.find((s) => s.id === section)?.label}
             </h2>
             <button
@@ -88,11 +89,13 @@ export default function App() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto p-4">
-            {section === "controls" && <>
-              <ControlPad />
-              <VoiceControls />
-              <MockSceneControls />
-            </>}
+            {section === "controls" && (
+              <div className="space-y-6">
+                <PanelSection title="Drive"><ControlPad /></PanelSection>
+                <PanelSection title="Voice"><VoiceControls /></PanelSection>
+                <MockSceneControls />
+              </div>
+            )}
             {section === "camera" && (
               <div className="space-y-4 text-xs text-zinc-400">
                 <p>The camera loads only while this tab is open. Leaving it or hiding the browser tab stops requests immediately.</p>

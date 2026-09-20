@@ -68,7 +68,7 @@ export function Menu({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800"
+        className="flex h-9 w-full items-center justify-center gap-1.5 rounded-md border border-zinc-700/80 text-sm text-zinc-300 transition-colors hover:bg-zinc-800"
       >
         {label}
         <Chevron />
@@ -79,7 +79,7 @@ export function Menu({
           <div
             ref={panelRef}
             style={{ position: "fixed", left: pos.left, top: pos.top, bottom: pos.bottom }}
-            className="z-50 max-h-[70vh] w-64 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-3 shadow-xl"
+            className="z-50 max-h-[70vh] w-64 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-3 shadow-lg"
           >
             {children}
           </div>,

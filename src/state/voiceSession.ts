@@ -124,6 +124,7 @@ const GOTO_LIMIT_MS = 30000;
 const GOTO_ARRIVE_M = 0.06;
 const POSE_SETTLE_MS = 1000;
 const POSE_MAX_MS = 8000;
+const HELD_POSES = new Set(["rest", "stand"]);
 
 type ActiveStep = { intent: VoiceIntent; startedAt: number; target?: Point };
 
@@ -160,7 +161,8 @@ export class VoiceExecutor {
       done = elapsed > 300 && (!state.arm || state.arm.mode === "idle") && !!step.target
         && Math.hypot(robot.x - step.target.x, robot.y - step.target.y) < GOTO_ARRIVE_M;
     } else if (step.intent.type === "pose") {
-      done = elapsed >= POSE_MAX_MS || (elapsed >= POSE_SETTLE_MS && !robot.pose);
+      // rest and stand are held states the robot keeps reporting, so they finish as soon as they are sent
+      done = elapsed >= POSE_MAX_MS || (elapsed >= POSE_SETTLE_MS && (!robot.pose || HELD_POSES.has(step.intent.pose)));
     } else {
       done = !this.action.active;
     }
