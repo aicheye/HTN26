@@ -18,7 +18,8 @@ const MOVES = ["forward", "backward", "left", "right"];
 // Camera looking straight down from 130 cm over the middle of the floor.
 const camera = { f: 1693, cx: 1152, cy: 648, rvec: [Math.PI, 0, 0], tvec: [-FLOOR[0] / 2, FLOOR[1] / 2, 130] };
 
-const robot = { x: 17, y: 16, heading: 0, command: "", face: "idle", poseUntil: 0 };
+const ARM = [-7.4, 29.1];          // the arm's base tag: just outside the left edge, where the real one was tracked
+const robot = { x: 17, y: 12, heading: 0, command: "", face: "idle", poseUntil: 0 };
 const started = Date.now();
 
 const robotClients = new WebSocketServer({ port: 8081 });
@@ -64,7 +65,7 @@ setInterval(() => {
     t: Date.now() - started, calibrated: true, frame: [2304, 1296], floor: FLOOR, zUp: true, floorMarkers: 4, fps: 15,
     markers: [0, 1, 2, 3, 4, 5],
     robot: { x: robot.x, y: robot.y, z: 10.5, heading: robot.heading, px: pixel(robot.x, robot.y) },
-    arm: { x: 58.5, y: 55, z: 5, heading: -135, px: pixel(58.5, 55) },
+    arm: { x: ARM[0], y: ARM[1], z: 5, heading: 0, px: pixel(ARM[0], ARM[1]) },
     camera,
   }) + "\n";
   for (const socket of trackerClients) socket.write(line);
