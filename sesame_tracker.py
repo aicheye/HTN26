@@ -30,6 +30,54 @@ def default_host():
         return "qnxpi78.local"
 
 
+ARM_TAG_HEIGHT_CM = 6.0    # tag 5 sits on top of the arm's base housing, this high above the table
+
+
+def pixel_to_floor(camera, u, v, z_cm):
+    """Floor point (cm) seen at pixel (u, v) at height z, from the tracker's camera pose (pi/client/floor.js)."""
+    R = cv2_rodrigues(camera["rvec"])
+    t = np.array(camera["tvec"], dtype=float)
+    ray = np.array([(u - camera["cx"]) / camera["f"], (v - camera["cy"]) / camera["f"], 1.0])
+    d = R.T @ ray
+    c = -R.T @ t
+    plane_z = z_cm if c[2] > 0 else -z_cm            # the floor z axis points away from the camera when zUp is false
+    k = (plane_z - c[2]) / d[2]
+    return float(c[0] + k * d[0]), float(c[1] + k * d[1])
+
+
+def floor_to_pixel(camera, x, y, z_cm):
+    """Pixel where the floor point (x, y) at height z appears, from the tracker's camera pose (floor.js)."""
+    R = cv2_rodrigues(camera["rvec"])
+    t = np.array(camera["tvec"], dtype=float)
+    c = -R.T @ t
+    p = np.array([x, y, z_cm if c[2] > 0 else -z_cm])
+    v = R @ p + t
+    return float(camera["cx"] + camera["f"] * v[0] / v[2]), float(camera["cy"] + camera["f"] * v[1] / v[2])
+
+
+def cv2_rodrigues(rvec):
+    r = np.array(rvec, dtype=float)
+    a = np.linalg.norm(r)
+    if a < 1e-12:
+        return np.eye(3)
+    k = r / a
+    K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + np.sin(a) * K + (1 - np.cos(a)) * (K @ K)
+
+
+def arm_tag_pose(state, height_cm=ARM_TAG_HEIGHT_CM):
+    """The arm base tag's floor pose with its x, y taken at its true height. The tracker's own x, y for tag 5
+    come from its apparent size, which reads near floor level for this tag and shifts it away from the camera."""
+    arm = state.get("arm")
+    if not arm or "x" not in arm:
+        return None
+    cam = state.get("camera")
+    if cam and "px" in arm:
+        x, y = pixel_to_floor(cam, arm["px"][0], arm["px"][1], height_cm)
+        return {"x": x, "y": y, "z": height_cm, "heading": arm["heading"]}
+    return {k: arm[k] for k in ("x", "y", "z", "heading")}
+
+
 class Tracker:
     HOLD_S = 10.0    # a sighting counts for this long: a small tag is missed in most frames while standing still
 
@@ -63,13 +111,13 @@ class Tracker:
                 continue
             if s.get("robot") and "x" in s["robot"]:
                 obs = {"robot": {k: s["robot"][k] for k in ("x", "y", "z", "heading")},
-                       "arm": None if not s.get("arm") or "x" not in s["arm"] else {k: s["arm"][k] for k in ("x", "y", "z", "heading")},
+                       "arm": arm_tag_pose(s),
                        "zUp": s.get("zUp", True), "unit": unit, "floorMarkers": s.get("floorMarkers", 0), "floor": s.get("floor"), "age": 0.0}
                 self.last_seen[unit] = (now, obs)
             elif unit in self.last_seen and now - self.last_seen[unit][0] <= self.HOLD_S:
                 obs = dict(self.last_seen[unit][1]); obs["age"] = now - self.last_seen[unit][0]
                 if s.get("arm") and "x" in s["arm"]:                       # the arm tag is usually seen; keep it fresh
-                    obs["arm"] = {k: s["arm"][k] for k in ("x", "y", "z", "heading")}
+                    obs["arm"] = arm_tag_pose(s)
             else:
                 continue
             key = (obs["age"] == 0.0, obs["floorMarkers"], 1 if obs["arm"] else 0)
@@ -89,7 +137,7 @@ class Tracker:
             for u in self.units:
                 s = self.state(u)
                 if s and s.get("calibrated") and s.get("arm") and "x" in s["arm"]:
-                    sightings.append((u, s["arm"], not s.get("zUp", True)))
+                    sightings.append((u, arm_tag_pose(s), not s.get("zUp", True)))
             if sightings:
                 unit_seen = sightings[-1][0]
                 if len(sightings) >= 5 or time.time() - end + timeout > 8 and len(sightings) >= 2:

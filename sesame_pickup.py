@@ -68,7 +68,12 @@ def auto_demo(obs, frame, args):
     pose, so the offsets are exactly the requested ones. Approach tilted, straightening for the grip."""
     tag = frame.pose_to_base(obs["robot"])
     R = rot(tag["heading"])
-    gx, gy = np.array([tag["x"], tag["y"]]) + R @ [args.grip_along, args.grip_across]
+    centre = np.array([tag["x"], tag["y"]])
+    along = args.grip_along
+    if args.hinge:                                          # two hinges, +-hinge along the heading: take the one nearer the arm
+        ends = [(np.linalg.norm(centre + R @ [h, args.grip_across]), h) for h in (args.hinge, -args.hinge)]
+        along += min(ends)[1]
+    gx, gy = centre + R @ [along, args.grip_across]
     z_grip = (obs["robot"].get("z", 10.5) + args.grip_above_tag + 100 * TABLE_Z) / 100
     jaw = (tag["heading"] + args.jaw_angle + 180) % 360 - 180
     # the grip pitch: straight down when the arm reaches it, else tilted forward only as far as needed
@@ -241,7 +246,8 @@ def execute(arm, traj, speed=1.0):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("demo", nargs="?", default="auto", help="a recorded demo name, or 'auto' (default) to grip from the tag geometry")
-    ap.add_argument("--grip-along", type=float, default=0.0, help="cm from the tag centre along its heading to the grip point")
+    ap.add_argument("--grip-along", type=float, default=0.0, help="cm from the tag centre along its heading to the grip point (added to --hinge)")
+    ap.add_argument("--hinge", type=float, default=3.0, help="the hinges sit this far from the tag centre at either end along the heading; the nearer one to the arm is gripped (0 = grip at the centre)")
     ap.add_argument("--grip-across", type=float, default=0.0, help="cm to the tag's left")
     ap.add_argument("--grip-above-tag", type=float, default=0.7, help="jaws close this many cm above the tag's reported height")
     ap.add_argument("--jaw-angle", type=float, default=90.0, help="jaw axis relative to the tag heading; 90 = across the body")
@@ -257,7 +263,7 @@ def main():
 
     if args.demo == "auto":
         demo = None
-        print(f"grasp from the tag: {args.grip_along:+.1f} cm along, {args.grip_across:+.1f} cm across, {args.grip_above_tag:+.1f} cm above the tag, jaws at {args.jaw_angle:.0f} deg")
+        print(f"grasp from the tag: the nearer hinge {args.hinge:.1f} cm from the centre along the heading{f' {args.grip_along:+.1f}' if args.grip_along else ''}, {args.grip_across:+.1f} cm across, {args.grip_above_tag:+.1f} cm above the tag, jaws at {args.jaw_angle:.0f} deg")
     else:
         try:
             demo = load(args.demo)
