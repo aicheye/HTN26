@@ -44,17 +44,30 @@ def main():
     args = sys.argv[1:]
     now = "--now" in args
     args = [a for a in args if a != "--now"]
-    from sesame_tracker import Tracker
+    from sesame_tracker import Tracker, alive_units, open_camera_page
     from so101_safe import default_port
 
     if not default_port():
         print("no arm found: plug the SO-101 in (USB), then run this again"); return 1
     tracker = Tracker()
     print(f"1. trackers at {tracker.host}: ", end="", flush=True)
+    up = alive_units(tracker)
     if sesame_seen(tracker):
-        print("a camera sees the Sesame")
+        print(f"a camera sees the Sesame (cameras up: {up})")
+    elif up:
+        # the trackers run; the Sesame's tag is just not in a frame right now (a 3.6 cm tag is missed often)
+        print(f"cameras {up} are up but none reports the Sesame. Opening the camera view; put the Sesame where a camera sees its tag.")
+        open_camera_page(tracker.host, up[0])
+        for i in range(120):
+            time.sleep(0.5)
+            if sesame_seen(tracker):
+                print(f"   a camera sees the Sesame after {(i + 1) / 2:.0f} s"); break
+            if i % 20 == 19:
+                print(f"   still waiting ({(i + 1) // 2} s). In the page: are the corner tags learned (camera height shown)? Is tag 0 on the Sesame in view?")
+        else:
+            print("   no camera reported the Sesame in 60 s. Fix what the page shows, then run this again."); return 1
     else:
-        print("no camera sees the Sesame")
+        print("no tracker answers")
         if not (os.path.isfile("pi/common.sh") and os.path.isdir("pi/tracker")):
             print("   fetching Sean's Pi files from origin/devel/sean (his code, do not commit it from here)")
             subprocess.run(["git", "fetch", "-q", "origin", "devel/sean"], check=False)
@@ -66,14 +79,17 @@ def main():
         print("   starting both trackers on the Pi in the background (log: pi/trackers-live.log)")
         with open("pi/trackers-live.log", "ab") as log:
             subprocess.Popen(["sh", "start_trackers.sh"], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
-        for i in range(90):
+        opened = False
+        for i in range(120):
             time.sleep(1)
             if sesame_seen(tracker):
                 print(f"   camera sees the Sesame after {i + 1} s"); break
-            if i % 10 == 9:
-                print(f"   still waiting ({i + 1} s). Is the laptop on the robot's WiFi? Is the Sesame's tag in view?")
+            if not opened and alive_units(tracker):
+                opened = open_camera_page(tracker.host, alive_units(tracker)[0])
+            if i % 15 == 14:
+                print(f"   still waiting ({i + 1} s). Trackers up: {alive_units(tracker) or 'none yet'}. Hold the camera still with 3+ corner tags in view until it learns the floor.")
         else:
-            print("   no camera sees the Sesame after 90 s. Check pi/trackers-live.log, the WiFi, and the tags."); return 1
+            print("   no camera sees the Sesame after 120 s. Check pi/trackers-live.log, the WiFi, and the page."); return 1
 
     print("2. floor-to-arm frame: ", end="", flush=True)
     if os.path.exists("arm_frame.json"):

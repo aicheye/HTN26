@@ -12,6 +12,7 @@ degrees with 0 along +x. zUp false means that frame is left-handed seen from abo
 """
 import json
 import os
+import sys
 import threading
 import time
 import urllib.request
@@ -98,6 +99,34 @@ class Tracker:
                         "heading": float(np.degrees(np.arctan2(np.median(np.sin(h)), np.median(np.cos(h)))))}
         out["samples"] = len(obs)
         return out
+
+
+def alive_units(tracker):
+    """The camera units whose tracker answers at all, whether or not they see anything."""
+    return [u for u in tracker.units if tracker.state(u)]
+
+
+_page_server = None
+
+
+def open_camera_page(host=None, unit=3):
+    """Pop up Sean's live camera page (pi/client/demo.html) for one camera in the browser. Serves pi/client on
+    localhost:5500 once. Does nothing if pi/client is not in this checkout."""
+    global _page_server
+    import subprocess
+    import webbrowser
+    client = os.path.join(HERE, "pi", "client")
+    if not os.path.isfile(os.path.join(client, "demo.html")):
+        print("   (Sean's camera page is not in this checkout: pi/client missing)")
+        return False
+    if _page_server is None:
+        _page_server = subprocess.Popen([sys.executable, "-m", "http.server", "5500", "--bind", "127.0.0.1"], cwd=client,
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.5)
+    url = f"http://localhost:5500/demo.html?host={host or default_host()}&unit={unit}"
+    print(f"   camera view: {url}")
+    webbrowser.open(url)
+    return True
 
 
 class Poller:
