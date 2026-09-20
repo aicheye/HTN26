@@ -2,16 +2,19 @@
 
 ## Arm: grip the Sesame anywhere
 
-One script, sets itself up on first use (installs uv and the Python environment if needed, about a minute):
+One command. Plug the arm in, join the robot's WiFi, and:
+
+```
+sh run.sh go             # starts the trackers, calibrates, records a demo: each only if not done yet; then grips
+sh run.sh go --now       # the same, and grips the moment a camera sees the Sesame
+```
+
+It sets itself up on first use (installs uv and the Python environment if needed, about a minute). The steps
+it runs for you, also available one at a time:
 
 ```
 sh run.sh check          # what is ready and what is missing, with the fix for each
 sh run.sh test           # the whole pick-and-place chain offline: no arm, no Pi
-```
-
-At the venue, on the robot WiFi, in this order:
-
-```
 sh run.sh trackers       # both Pi cameras (fetches Sean's Pi files from origin/devel/sean if this checkout lacks them)
 sh run.sh calibrate      # fingertips on the Sesame's tag at 3 placements
 sh run.sh record grip2   # guide the grasp by hand: g when the jaws close, q to save

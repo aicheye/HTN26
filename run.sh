@@ -1,6 +1,8 @@
 #!/bin/sh
 # The one command for the arm demo. Sets itself up on first use.
 #
+#   sh run.sh go                 THE command: start the trackers if needed, calibrate if needed, record a demo
+#                                if needed, then grip the Sesame (space = go).  sh run.sh go --now  grips at once.
 #   sh run.sh check              what is ready and what is missing, with the fix for each
 #   sh run.sh test               the whole pick-and-place chain offline (no arm, no Pi)
 #   sh run.sh trackers           start both Pi cameras' trackers (fetches Sean's Pi files if this checkout lacks them)
@@ -34,6 +36,7 @@ ensure_pi() {
 
 case "$cmd" in
   setup)     sh setup.sh ;;
+  go)        ensure_env; "$PY" arm_go.py "$@" ;;
   check)     ensure_env; "$PY" preflight.py "$@" ;;
   test)      ensure_env; "$PY" test_pickup.py "$@" && "$PY" -m pytest -q test_so101_ik.py "$@" ;;
   trackers)  ensure_pi; sh start_trackers.sh "$@" ;;
@@ -43,5 +46,5 @@ case "$cmd" in
   grasp)     ensure_env; "$PY" grasp_robot.py "$@" ;;
   replay)    ensure_env; "$PY" replay_demo.py "$@" ;;
   arm)       ensure_env; "$PY" check_arm.py "$@" ;;
-  *)         sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)         sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
