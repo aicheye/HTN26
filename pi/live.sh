@@ -12,7 +12,8 @@ cd "$(dirname "$0")/.." || exit 1
 [ -d node_modules ] || { echo "the web UI is not installed. Run once, with internet: npm install"; exit 1; }
 [ -d bridge/node_modules ] || { echo "the bridge is not installed. Run once, with internet: npm --prefix bridge install"; exit 1; }
 
-node bridge/bridge.mjs > bridge/bridge.log 2>&1 &
+# bridge/.env holds GROQ_API_KEY for voice control (see bridge/.env.example).
+node --env-file-if-exists=bridge/.env bridge/bridge.mjs > bridge/bridge.log 2>&1 &
 BRIDGE=$!
 SCAN=
 if [ -x vision/.venv/bin/python ] && [ -f vision/models/mobile_sam.encoder.onnx ]; then
