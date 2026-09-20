@@ -89,8 +89,15 @@ def main():
     print("2. floor-to-arm frame: ", end="", flush=True)
     if os.path.exists("arm_frame.json"):
         print("arm_frame.json present")
+    elif "--offset" in args:
+        i = args.index("--offset"); ahead, left = args[i + 1], args[i + 2]
+        turn = args[args.index("--turn") + 1] if "--turn" in args else "0"
+        args = [a for k, a in enumerate(args) if k not in (i, i + 1, i + 2) and a not in ("--turn", turn)]
+        print(f"missing, from the arm base tag with the base {ahead} cm ahead, {left} cm left of it, turned {turn} deg")
+        if subprocess.run([PY, "frame_from_arm_tag.py", "--offset", ahead, left, "--turn", turn]).returncode != 0:
+            return 1
     else:
-        print("missing, calibrating now (hold the arm)")
+        print("missing, calibrating now (hold the arm). Or: sh run.sh go --offset AHEAD LEFT  to use the arm base tag instead")
         if subprocess.run([PY, "calibrate_arm_frame.py"]).returncode != 0:
             return 1
 

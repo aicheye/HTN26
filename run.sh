@@ -8,7 +8,8 @@
 #   sh run.sh trackers           start both Pi cameras' trackers (fetches Sean's Pi files if this checkout lacks them)
 #   sh run.sh view               window with both cameras and what the tracker detects (q quits, s saves)
 #   sh run.sh page               Sean's live web page for a camera, in the browser (sh run.sh page 4 for the second)
-#   sh run.sh calibrate          fingertips on the Sesame's tag at 3 placements -> arm_frame.json
+#   sh run.sh calibrate          fingertips on the Sesame's tag at 3 placements -> arm_frame.json (hands-on, most accurate)
+#   sh run.sh frame --offset A L the same transform from the arm base tag (id 5) and a ruler: no hands-on step
 #   sh run.sh record NAME        guide the grasp by hand with the tracker running -> demos/NAME.json
 #   sh run.sh pickup NAME        p = plan, space = find the Sesame, grip, lift, carry, set down, release
 #   sh run.sh replay NAME        play a demo back where it was recorded
@@ -47,10 +48,11 @@ case "$cmd" in
              (cd pi/client && python3 -m http.server 5500 --bind 127.0.0.1 >/dev/null 2>&1 &)
              sleep 1; URL="http://localhost:5500/demo.html?host=$HOST&unit=$UNIT"; echo "$URL"; open "$URL" 2>/dev/null || xdg-open "$URL" ;;
   calibrate) ensure_env; "$PY" calibrate_arm_frame.py "$@" ;;
+  frame)     ensure_env; "$PY" frame_from_arm_tag.py "$@" ;;
   record)    ensure_env; "$PY" record_demo.py "$@" ;;
   pickup)    ensure_env; "$PY" sesame_pickup.py "$@" ;;
   grasp)     ensure_env; "$PY" grasp_robot.py "$@" ;;
   replay)    ensure_env; "$PY" replay_demo.py "$@" ;;
   arm)       ensure_env; "$PY" check_arm.py "$@" ;;
-  *)         sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)         sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
