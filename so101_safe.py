@@ -46,3 +46,23 @@ def arm_config(port):
     if (here / "follower.json").exists():
         return SO101FollowerConfig(port=port, id="follower", calibration_dir=here)
     return SO101FollowerConfig(port=port, id="follower")
+
+
+def connect_with_retries(robot, tries=6, pause_s=0.4):
+    """robot.connect(calibrate=False), retried: the Feetech bus now and then returns a corrupted or missing
+    status packet during the first writes after connect ("Incorrect status packet", "no status packet")."""
+    import time
+    last = None
+    for attempt in range(tries):
+        try:
+            robot.connect(calibrate=False)
+            return robot
+        except ConnectionError as e:
+            last = e
+            print(f"arm bus glitch on connect ({str(e).split('[')[-1].strip(']')}), retrying ({attempt + 1}/{tries})")
+            try:
+                robot.bus.port_handler.closePort()
+            except Exception:
+                pass
+            time.sleep(pause_s)
+    raise last
