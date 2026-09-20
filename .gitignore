@@ -4,3 +4,5 @@ __pycache__/
 lerobot/
 reachability.csv
 reachability.png
+demos/
+arm_frame.json
