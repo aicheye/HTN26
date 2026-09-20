@@ -29,7 +29,11 @@ export function Map2D({
   compact = false,
   onPickGoal,
   insetLeft = 0,
+  onSwapView,
 }: MapProps) {
+  // A press that moves more than this is a drag, the tilt gesture into 3D. Anything shorter is a click for a goal.
+  const TILT_DRAG_PX = 40;
+  const press = useRef<{ x: number; y: number; swapped: boolean } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<View>({ scale: 1, offsetX: 0, offsetY: 0, height: 0 });
@@ -67,7 +71,7 @@ export function Map2D({
   }, [state, showCameraLayer, compact, insetLeft]);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!onPickGoal) return;
+    if (!onPickGoal || press.current?.swapped) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const { scale, offsetX, offsetY, height } = viewRef.current;
     const px = e.clientX - rect.left;
@@ -83,6 +87,12 @@ export function Map2D({
       <canvas
         ref={canvasRef}
         onClick={handleClick}
+        onPointerDown={(e) => { press.current = { x: e.clientX, y: e.clientY, swapped: false }; }}
+        onPointerMove={(e) => {
+          const p = press.current;
+          if (!p || p.swapped || !onSwapView || e.buttons === 0) return;
+          if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > TILT_DRAG_PX) { p.swapped = true; onSwapView(); }
+        }}
         className="h-full w-full cursor-crosshair rounded-lg"
       />
     </div>

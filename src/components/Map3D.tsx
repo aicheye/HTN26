@@ -34,6 +34,7 @@ const DRAG_PX = 4; // pointer travel that still counts as a click, not an orbit
 const DRAG_MS = 300;
 
 type ViewMode = "free" | "top" | "iso" | "follow";
+const FLAT_POLAR_RAD = 0.12;  // 7 degrees off straight down: tilting the camera flatter than this shows the 2D map
 
 /**
  * Three.js is Y-up but the schema is Z-up, so everything lives inside one group
@@ -46,6 +47,9 @@ export function Map3D({
   compact = false,
   orbit = false,
   onPickGoal,
+  onSwapView,
+  enterFromTop = false,
+  insetLeft = 0,
 }: MapProps) {
   const { width, length } = state.arena;
   const [view, setView] = useState<ViewMode>("iso");
@@ -57,7 +61,10 @@ export function Map3D({
         shadows
         dpr={[1, 2]}
         camera={{
-          position: [width / 2, Math.max(width, length) * 1.6, length * 1.3],
+          // Coming from the 2D map, the camera starts 0.3 rad off straight down and glides to the usual angle.
+          position: enterFromTop
+            ? [width / 2, Math.max(width, length) * 2.2, -length / 2 + Math.max(width, length) * 2.2 * Math.tan(0.3)]
+            : [width / 2, Math.max(width, length) * 1.6, length * 1.3],
           fov: 45,
           near: 0.05,
           far: 60,
@@ -124,11 +131,15 @@ export function Map3D({
           compact={compact}
           orbit={orbit}
           onUserTakeOver={() => setView((v) => (v === "follow" ? v : "free"))}
+          onFlat={onSwapView}
         />
       </Canvas>
 
       {!compact && (
-        <div className="absolute left-3 top-3 flex gap-1 rounded-lg border border-zinc-700 bg-zinc-900/85 p-1 shadow-lg backdrop-blur">
+        <div
+          className="absolute top-3 flex gap-1 rounded-lg border border-zinc-700 bg-zinc-900/85 p-1 shadow-lg backdrop-blur transition-[left] duration-300 ease-out"
+          style={{ left: 12 + insetLeft }}  // the open side panel lies over the left of the map and hid these buttons
+        >
           {(
             [
               ["iso", "Reset"],
@@ -166,6 +177,7 @@ function CameraRig({
   compact,
   orbit,
   onUserTakeOver,
+  onFlat,
 }: {
   arena: Arena;
   robot: Robot | undefined;
@@ -173,11 +185,15 @@ function CameraRig({
   compact: boolean;
   orbit: boolean;
   onUserTakeOver: () => void;
+  onFlat?: () => void;
 }) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as
-    | { target: THREE.Vector3; addEventListener: Function; removeEventListener: Function }
+    | { target: THREE.Vector3; addEventListener: Function; removeEventListener: Function; getPolarAngle: () => number }
     | null;
+  // Looking straight down is the 2D map's job. The swap is armed once the camera has been clearly tilted, so a
+  // view that starts near the top does not swap straight back.
+  const flatArmed = useRef(false);
   // Include the tabletop border and arm in the presets, including portrait viewports.
   const size = useThree((s) => s.size);
   const span = Math.max(arena.width + 2 * tableBorder(arena), arena.length + 2 * tableBorder(arena), ARM_MAX_REACH * 1.3)
@@ -234,6 +250,9 @@ function CameraRig({
     }
 
     if (!controls) return;
+    const polar = controls.getPolarAngle();
+    if (polar > FLAT_POLAR_RAD + 0.1) flatArmed.current = true;
+    else if (polar < FLAT_POLAR_RAD && flatArmed.current && onFlat) { flatArmed.current = false; onFlat(); return; }
     const k = 1 - Math.exp(-6 * dt);
 
     if (view === "follow" && robot) {

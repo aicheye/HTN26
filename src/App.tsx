@@ -31,6 +31,7 @@ export default function App() {
   } = useWorld();
   const [started, setStarted] = useState(false);
   const [mainView, setMainView] = useState<Renderer>("3d");
+  const [enteredFromTop, setEnteredFromTop] = useState(false);  // 3D was reached by tilting out of the 2D map
   const [cameraUrl, setCameraUrl] = useState<string | null>(null);
   const feedUrl = cameraUrl ?? state?.cameraFeedUrl ?? DEFAULT_CAMERA_URL;
   const [showDebug, setShowDebug] = useState(false);
@@ -39,7 +40,6 @@ export default function App() {
     cancelVoice();
     setSection(next);
   };
-  const pipView: Renderer = mainView === "3d" ? "2d" : "3d";
   const visible = SECTIONS.filter((s) => s.id !== "raw" || showDebug);
 
   return (
@@ -206,31 +206,14 @@ export default function App() {
               selectedRobotId={selectedRobotId}
               onPickGoal={(point) => send("goto", { target: point })}
               insetLeft={section ? 256 : 0}  // the open side panel is w-64 and lies over the map
+              // One view, as in Google Maps: tilting 3D to straight down shows the 2D map, dragging 2D tilts into 3D.
+              onSwapView={() => { setEnteredFromTop(mainView === "2d"); setMainView(mainView === "2d" ? "3d" : "2d"); }}
+              enterFromTop={enteredFromTop}
             />
+            <p className="pointer-events-none absolute bottom-3 right-3 rounded bg-zinc-900/80 px-2 py-1 text-[11px] text-zinc-300">
+              {mainView === "2d" ? "Drag to tilt into 3D · click to set a goal" : "Tilt to straight down for the 2D map"}
+            </p>
 
-            <div className="absolute right-3 top-3 h-40 w-56 overflow-hidden rounded-lg bg-zinc-900 shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
-              <div className="pointer-events-none h-full w-full">
-                <MapView
-                  renderer={pipView}
-                  state={state}
-                  selectedRobotId={selectedRobotId}
-                  compact
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => setMainView(pipView)}
-                title={`Show ${pipView.toUpperCase()} full size`}
-                className="group absolute inset-0 flex items-end justify-between p-1.5"
-              >
-                <span className="rounded bg-zinc-900/85 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-300">
-                  {pipView.toUpperCase()}
-                </span>
-                <span className="rounded bg-zinc-900/0 px-1.5 py-0.5 text-[10px] font-medium text-transparent transition group-hover:bg-zinc-100/90 group-hover:text-zinc-900">
-                  Swap
-                </span>
-              </button>
-            </div>
           </>
         ) : (
           <EmptyStage
