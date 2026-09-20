@@ -59,6 +59,10 @@ def main():
             print("   fetching Sean's Pi files from origin/devel/sean (his code, do not commit it from here)")
             subprocess.run(["git", "fetch", "-q", "origin", "devel/sean"], check=False)
             subprocess.run(["git", "restore", "--source=origin/devel/sean", "--", "pi"], check=False)
+        if not os.path.exists(os.path.expanduser("~/.ssh/htn_pi")):
+            print("   the Pi would ask for a password, which cannot be answered in the background.")
+            print("   Run once:  sh pi/setup-key.sh   (the Pi's password is qnxuser), then run this again.")
+            return 1
         print("   starting both trackers on the Pi in the background (log: pi/trackers-live.log)")
         with open("pi/trackers-live.log", "ab") as log:
             subprocess.Popen(["sh", "start_trackers.sh"], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
