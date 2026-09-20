@@ -8,6 +8,7 @@ import http from "node:http";
 import net from "node:net";
 import { WebSocketServer } from "ws";
 import { pixelToFloor } from "../pi/client/floor.js";
+import { createVoiceHandler } from "./voice.mjs";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const TRACKER_HOST = process.env.TRACKER_HOST ?? "qnxpi78.local";
@@ -173,7 +174,9 @@ function setObjects(body) {
   return cvObstacles;
 }
 
+const voiceHandler = createVoiceHandler({ getState: buildState });
 const server = http.createServer((request, response) => {
+  if (request.url === "/voice") { void voiceHandler(request, response); return; }
   const reply = (status, body) => {
     response.writeHead(status, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" });
     response.end(JSON.stringify(body));
