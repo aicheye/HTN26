@@ -154,6 +154,11 @@ def plan(demo, frame0, obs, args):
     open_value = max(s["gripper"] for s in demo["samples"] if s["t"] <= grasp["t"])   # how far the jaws were open before the grip
     grip_end = poses[-1]
     pick = {k: grip_end[k] for k in ("x", "y", "z", "jaw_yaw", "pitch")}
+    if ik(pick["x"], pick["y"], pick["z"], pick["jaw_yaw"], pick["pitch"]) is None:
+        dist = 100 * np.hypot(pick["x"], pick["y"])
+        reach = max((r for r in np.arange(5, 40, 0.5) if ik(r / 100, 0, pick["z"], 0, pick["pitch"]) is not None), default=0)
+        return None, (f"the Sesame is {dist:.0f} cm from the arm's base, at ({100*pick['x']:.0f}, {100*pick['y']:.0f}) cm in the arm's frame; "
+                      f"the top-down grip reaches about {reach:.0f} cm at that height. Move the Sesame closer to the arm.")
     drop, pitch = pick_drop(pick, args)
     if drop is None:
         return None, "no reachable drop point near the pick, even tilted for the carry: lower --lift, or pass --drop-offset / --drop"
