@@ -19,7 +19,7 @@ import { WebSocketServer } from "ws";
 import { pixelToFloor } from "../pi/client/floor.js";
 import { GaitEngine } from "./gait.mjs";
 import { Navigator } from "./navigator.mjs";
-import { leavesArena } from "./planner.mjs";
+import { ROBOT_RADIUS_M, edgeMargin, leavesArena } from "./planner.mjs";
 import { PoseFilter } from "./pose-filter.mjs";
 import { createVoiceHandler } from "./voice.mjs";
 
@@ -64,9 +64,12 @@ const gaitEngine = new GaitEngine((servos) => sendToRobot({ servos }), drive);
 // take a tracked robot into the closed strip along the table's edge (planner.mjs) is replaced by a stop.
 let edgeStops = 0;
 let latestState = null;  // the state of the last 100 ms tick, for the edge check
+// The robot's reach from its marker in metres, legs included. vision/scan.py measures it in the camera picture and
+// posts it to /robot. Obstacle clearance and the closed strip along the edge both grow with it.
+let robotRadius = ROBOT_RADIUS_M;
 function move(command, face = {}) {
   const robot = latestState?.robots[0];
-  if (robot?.tracking && leavesArena(robot, latestState.arena, command)) {
+  if (robot?.tracking && leavesArena(robot, latestState.arena, command, robotRadius)) {
     edgeStops++;
     move("stop");
     return false;
@@ -172,12 +175,13 @@ function buildState() {
   };
   return {
     schemaVersion: 1, seq: seq++, timestamp: now,
-    arena: { width: (tracker?.floor[0] ?? 0) / 100, length: (tracker?.floor[1] ?? 0) / 100, cornerTagIds: CORNER_TAGS },
+    // edgeMargin is not part of the frontend schema: the robot's centre stays this far inside the arena (planner.mjs)
+    arena: { width: (tracker?.floor[0] ?? 0) / 100, length: (tracker?.floor[1] ?? 0) / 100, cornerTagIds: CORNER_TAGS, edgeMargin: edgeMargin(robotRadius) },
     calibration: { ok: Boolean(fresh) },
     robots: robot ? [robot] : [],
     obstacles: [...(arm ? [arm] : []), ...cvObstacles, ...manualObstacles],
     ...(navigator.goal ? { goal: navigator.goal, path: robot ? [{ x: robot.x, y: robot.y }, ...navigator.path] : navigator.path } : {}),
-    mission: { ...navigator.status(), edgeStops },  // not part of the frontend schema: navigation state for display and debugging
+    mission: { ...navigator.status(), edgeStops, robotRadius },  // not part of the frontend schema: navigation state for display and debugging
   };
 }
 
@@ -191,7 +195,7 @@ function handleCommand(command) {
     return ack(true);
   }
   navigator.cancel();  // any manual command cancels a goto
-  if (latestState?.robots[0]?.tracking && leavesArena(latestState.robots[0], latestState.arena, command.type)) {
+  if (latestState?.robots[0]?.tracking && leavesArena(latestState.robots[0], latestState.arena, command.type, robotRadius)) {
     move("stop");
     return ack(false, "the strip along the table's edge is closed to the robot");
   }
@@ -248,6 +252,22 @@ const server = http.createServer((request, response) => {
     return response.end(png);
   }
   if (request.url === "/objects" && request.method === "GET") return reply(200, cvObstacles);
+  if (request.url === "/robot" && request.method === "GET") return reply(200, { radius: robotRadius });
+  if (request.url === "/robot" && request.method === "POST") {
+    let text = "";
+    request.on("data", (chunk) => { text += chunk; });
+    request.on("end", () => {
+      try {
+        const radius = Number(JSON.parse(text).radius);
+        if (!Number.isFinite(radius)) throw new Error("radius must be a number, in metres");
+        // Never below the body's own half-diagonal. 0.12 m is the most the legs reach, and a larger value means the
+        // measurement merged the robot with something next to it.
+        robotRadius = navigator.robotRadius = Math.min(0.12, Math.max(ROBOT_RADIUS_M, radius));
+        reply(200, { radius: robotRadius });
+      } catch (error) { reply(400, { error: error.message }); }
+    });
+    return;
+  }
   if (request.url === "/drive" && request.method === "GET") return reply(200, drive);
   if (request.url === "/drive" && request.method === "POST") {
     let text = "";
@@ -319,7 +339,7 @@ setInterval(() => {
   const state = latestState = buildState();
   // A walk keeps going until the next command, so it is checked on every tick, not only when it starts.
   const walk = (drive.mode === "software" && gaitEngine.command) || (robotState?.command ?? "");
-  if (state.robots[0]?.tracking && leavesArena(state.robots[0], state.arena, walk)) { edgeStops++; move("stop"); }
+  if (state.robots[0]?.tracking && leavesArena(state.robots[0], state.arena, walk, robotRadius)) { edgeStops++; move("stop"); }
   navigator.step(state.robots[0], state.arena, state.obstacles);
   const message = JSON.stringify({ type: "state", data: state });
   for (const socket of sockets.clients) if (socket.readyState === WebSocket.OPEN) socket.send(message);

@@ -110,6 +110,21 @@ def to_obstacles(objects, masks, picture, view, state, previous):
     return obstacles
 
 
+def send_robot_radius(frames, history):
+    """Measures the robot's reach in every frame of this scan and posts the median of the last 30 measurements, in
+    metres. The bridge sizes the obstacle clearance and the closed strip along the edge with it."""
+    for image, state in frames:
+        view = detect.TopView(*state["floor"])
+        radius = detect.robot_radius_cm(view.warp(image, state["camera"]), view, state)
+        if radius is not None:
+            history.append(radius)
+    if len(history) < 5:
+        return None
+    radius = round(float(np.median(history)) / 100, 3)
+    request = urllib.request.Request(f"{BRIDGE}/robot", json.dumps({"radius": radius}).encode(), {"Content-Type": "application/json"})
+    return json.loads(urllib.request.urlopen(request, timeout=5).read())["radius"]
+
+
 def send(obstacles):
     request = urllib.request.Request(f"{BRIDGE}/obstacles", json.dumps(obstacles).encode(), {"Content-Type": "application/json"})
     urllib.request.urlopen(request, timeout=5).read()
@@ -141,6 +156,7 @@ def watch(sam):
 
     threading.Thread(target=fetch_forever, daemon=True).start()
     previous, memory, last_newest = [], {}, 0
+    radii = collections.deque(maxlen=30)
     while True:
         recent = [entry for entry in list(window) if time.time() - entry[0] <= WATCH_WINDOW_S]
         if len(recent) < 3 or recent[-1][0] == last_newest:
@@ -156,6 +172,9 @@ def watch(sam):
         cv2.imwrite("objects.jpg", picture)
         try:
             send(previous)
+            radius = send_robot_radius([(image, state) for _, image, state in recent[-3:]], radii)
+            if radius:
+                print(f"  robot reach {radius * 100:.1f} cm from {len(radii)} measurements", flush=True)
         except OSError:
             print("  bridge not reachable, objects not shown. Start it with sh pi/live.sh or npm --prefix bridge start", flush=True)
 
@@ -182,6 +201,8 @@ def main():
     try:
         send(obstacles)
         print(f"sent to the bridge at {BRIDGE}")
+        radius = send_robot_radius(frames, collections.deque(maxlen=30))
+        print(f"robot reach {radius * 100:.1f} cm" if radius else "robot reach not measured: the robot was in fewer than 5 usable frames")
     except OSError as error:
         (out / "obstacles.json").write_text(json.dumps(obstacles))
         print(f"bridge not reachable ({error}). Saved {out / 'obstacles.json'} instead")

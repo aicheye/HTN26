@@ -40,6 +40,7 @@ export class Navigator {
   constructor(send, motion = {}) {
     this.send = send;  // (command string) => void
     this.motion = { ...DEFAULT_MOTION, ...motion };
+    this.robotRadius = undefined;  // metres, set by the bridge once the camera has measured the robot
     this.state = "idle";  // idle, navigating, recovering, calibrating, done, failed
     this.detail = "";
     this.goal = null;
@@ -89,7 +90,7 @@ export class Navigator {
     if (this.isStuck(robot, now)) return this.startRecovery(now);
 
     if (now - this.plannedAt > REPLAN_MS || this.path.length === 0) {
-      const planned = planPath(robot, this.goal, arena, obstacles);
+      const planned = planPath(robot, this.goal, arena, obstacles, this.robotRadius);
       this.plannedAt = now;
       if (!planned) {
         if (++this.failedPlans >= MAX_FAILED_PLANS) this.finish("failed", "no walkable path to the goal");

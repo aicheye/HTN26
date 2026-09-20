@@ -3,15 +3,19 @@
 // obstacle follow Arjun's nav/planner.py.
 
 export const CELL_M = 0.02;
-const ROBOT_HALF_DIAGONAL_M = 0.082;
-export const CLEARANCE_M = 0.1;  // robot half-diagonal plus a margin: obstacles grow by this much
+// How far the robot reaches from its marker. 0.082 m is the body's half-diagonal. vision/scan.py measures the real
+// reach in the camera picture, legs included, and the bridge passes it in as robotRadius.
+export const ROBOT_RADIUS_M = 0.082;
+const CLEARANCE_EXTRA_M = 0.018;
+export const CLEARANCE_M = ROBOT_RADIUS_M + CLEARANCE_EXTRA_M;  // obstacles grow by the robot's reach plus a margin
 // The strip of table that holds the corner markers is closed to the robot: no part of it may ever be there. The
 // arena is the rectangle between the marker centres, and the markers are TAG_M wide and flush with the table's
-// corners. The strip therefore reaches TAG_M / 2 into the arena, and the robot's centre has to stay its
-// half-diagonal further in: 0.04 + 0.082 = 0.122 m from the arena's edge. On a 0.63 m arena that leaves a
-// 0.386 m square for the centre. This is a hard limit for planning (below) and for walking (leavesArena).
+// corners. The strip therefore reaches TAG_M / 2 into the arena, and the robot's centre has to stay its reach
+// further in: 0.04 + 0.082 = 0.122 m from the arena's edge. On a 0.63 m arena that leaves a 0.386 m square for
+// the centre. This is a hard limit for planning (below) and for walking (leavesArena).
 export const TAG_M = 0.08;
-export const EDGE_MARGIN_M = TAG_M / 2 + ROBOT_HALF_DIAGONAL_M;
+export const edgeMargin = (robotRadius = ROBOT_RADIUS_M) => TAG_M / 2 + robotRadius;
+export const EDGE_MARGIN_M = edgeMargin();
 // A free cell costs up to 1 + SOFT_WEIGHT times its length right at a limit, falling to 1 SOFT_BAND_M further out.
 // This centres paths in gaps, where a plain shortest path runs along the limit and any walking error puts the
 // robot against the obstacle. The band is 5 cm because the robot's centre only has a 0.386 m square to move in:
@@ -51,22 +55,23 @@ export function distanceToObstacle(p, obstacle) {
 }
 
 // How far a point is inside the closed strip along the arena's edge. 0 when it is outside the strip.
-function edgeDepth(p, arena) {
-  return Math.max(0, EDGE_MARGIN_M - Math.min(p.x, arena.width - p.x, p.y, arena.length - p.y));
+function edgeDepth(p, arena, margin) {
+  return Math.max(0, margin - Math.min(p.x, arena.width - p.x, p.y, arena.length - p.y));
 }
 
 // True when walking with this command takes the robot into the closed strip, or deeper into it. Turning is always
 // allowed, and so is walking out of the strip or along it, so that a robot that ended up there can leave.
-export function leavesArena(robot, arena, command) {
+export function leavesArena(robot, arena, command, robotRadius = ROBOT_RADIUS_M) {
   if ((command !== "forward" && command !== "backward") || !(arena?.width > 0 && arena?.length > 0)) return false;
   const sign = command === "forward" ? 1 : -1, ahead = 0.02;
   const next = { x: robot.x + sign * Math.cos(robot.yaw) * ahead, y: robot.y + sign * Math.sin(robot.yaw) * ahead };
-  return edgeDepth(next, arena) > edgeDepth(robot, arena) + 1e-9;
+  return edgeDepth(next, arena, edgeMargin(robotRadius)) > edgeDepth(robot, arena, edgeMargin(robotRadius)) + 1e-9;
 }
 
 // A* over an 8-connected grid. Returns waypoints from start to goal, or null when no walkable path exists.
 // A goal inside an obstacle (for example "go to the chocolate") is replaced by the nearest free cell.
-export function planPath(start, goal, arena, obstacles, clearance = CLEARANCE_M) {
+export function planPath(start, goal, arena, obstacles, robotRadius = ROBOT_RADIUS_M) {
+  const clearance = robotRadius + CLEARANCE_EXTRA_M, margin = edgeMargin(robotRadius);
   const cols = Math.max(1, Math.ceil(arena.width / CELL_M)), rows = Math.max(1, Math.ceil(arena.length / CELL_M));
   const centre = (i) => ({ x: ((i % cols) + 0.5) * CELL_M, y: (Math.floor(i / cols) + 0.5) * CELL_M });
   const cellOf = (p) => {
@@ -77,7 +82,7 @@ export function planPath(start, goal, arena, obstacles, clearance = CLEARANCE_M)
   for (let i = 0; i < blocked.length; i++) {
     const p = centre(i);
     // slack: how far the robot's centre is beyond the nearest limit, an obstacle's clearance or the table edge
-    let slack = Math.min(p.x, arena.width - p.x, p.y, arena.length - p.y) - EDGE_MARGIN_M;
+    let slack = Math.min(p.x, arena.width - p.x, p.y, arena.length - p.y) - margin;
     for (const o of obstacles) slack = Math.min(slack, distanceToObstacle(p, o) - clearance);
     blocked[i] = slack < 0 ? 1 : 0;
     cellCost[i] = 1 + SOFT_WEIGHT * Math.max(0, Math.min(1, 1 - slack / SOFT_BAND_M));

@@ -110,6 +110,41 @@ def object_mask(top, view, state):
     return mask & usable, usable, lab[..., 0], (np.abs(darker) > 40) & usable
 
 
+def robot_radius_cm(top, view, state):
+    """How far the robot reaches from its marker, legs included, measured in one top view. After Arjun's
+    nav/segment.py, which measures the robot once at start. Returns None when the robot is not in view, or when its
+    blob runs out of the 16 cm window, which means it has merged with an object or a shadow next to it.
+
+    The robot is about 10 cm tall and the view is the floor plane, so its upper parts appear up to
+    130 / (130 - 10) = 1.08 times too far out. That is left in: it errs toward a larger robot."""
+    robot = state.get("robot")
+    if not (robot and state.get("camera")):
+        return None
+    p = np.linalg.inv(floor_to_image(state["camera"])) @ np.array([robot["px"][0], robot["px"][1], 1.0])
+    cx, cy = view.to_view(p[0] / p[2], p[1] / p[2])
+    reach = 16 * PX_PER_CM
+    if cx < reach or cy < reach or cx + reach >= top.shape[1] or cy + reach >= top.shape[0]:
+        return None
+    window = top[cy - reach:cy + reach + 1, cx - reach:cx + reach + 1]
+    if (window.sum(axis=2) == 0).any():
+        return None                                        # part of the window is outside the camera frame
+    lab = cv2.cvtColor(cv2.GaussianBlur(window, (0, 0), 1.0), cv2.COLOR_BGR2LAB).astype(np.float32)
+    ring = np.hypot(*np.mgrid[-reach:reach + 1, -reach:reach + 1]) > reach - PX_PER_CM
+    board = np.median(lab[ring], axis=0)                   # the outermost centimetre is bare board in a usable frame
+    body = (np.hypot(lab[..., 1] - board[1], lab[..., 2] - board[2]) > 16) | (board[0] - lab[..., 0] > 70)
+    # The marker on the robot's back is white paper: fill it in. Then drop anything thinner than 0.9 cm, which
+    # removes the robot's cable and keeps its legs.
+    body = cv2.morphologyEx(body.astype(np.uint8), cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5 * PX_PER_CM // 2,) * 2))
+    cv2.circle(body, (reach, reach), 3 * PX_PER_CM, 1, -1)
+    body = cv2.morphologyEx(body, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(0.9 * PX_PER_CM),) * 2))
+    count, labels = cv2.connectedComponents(body)
+    blob = labels == labels[reach, reach]
+    if blob[ring].any():
+        return None
+    ys, xs = np.nonzero(blob)
+    return float(np.percentile(np.hypot(xs - reach, ys - reach), 95)) / PX_PER_CM
+
+
 def white_balance(picture, view):
     """Corrects the camera's colour cast using the white paper border of the four floor markers as the reference.
 
