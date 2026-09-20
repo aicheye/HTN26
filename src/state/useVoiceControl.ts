@@ -16,7 +16,9 @@ export function useVoiceControl(snapshot: () => VoiceSnapshot, wsUrl: string, so
   const pending = useRef<AbortController | null>(null);
   // The last unanswered question, so a spoken reply is interpreted together with the request that prompted it.
   const clarification = useRef<(Clarification & { at: number }) | null>(null);
-  const [voicePhase, setVoicePhase] = useState<"idle" | "requesting" | "recording" | "processing">("idle");
+  const [voicePhase, setVoicePhaseState] = useState<"idle" | "requesting" | "recording" | "processing">("idle");
+  const phaseRef = useRef<typeof voicePhase>("idle");
+  const setVoicePhase = useCallback((phase: typeof voicePhase) => { phaseRef.current = phase; setVoicePhaseState(phase); }, []);
   const voiceSupported = recordingSupported();
 
   const cancelVoice = useCallback(() => {
@@ -26,7 +28,7 @@ export function useVoiceControl(snapshot: () => VoiceSnapshot, wsUrl: string, so
     pending.current = null;
     executor.cancel();
     setVoicePhase("idle");
-  }, [executor]);
+  }, [executor, setVoicePhase]);
 
   const submit = useCallback(async (audio: Blob) => {
     const controller = new AbortController();
@@ -52,7 +54,7 @@ export function useVoiceControl(snapshot: () => VoiceSnapshot, wsUrl: string, so
       window.clearTimeout(timeout);
       if (pending.current === controller) { pending.current = null; setVoicePhase("idle"); }
     }
-  }, [executor]);
+  }, [executor, setVoicePhase]);
 
   const startListening = useCallback(() => {
     cancelVoice();
@@ -68,9 +70,10 @@ export function useVoiceControl(snapshot: () => VoiceSnapshot, wsUrl: string, so
       if (error) { setVoiceMessage(error); setVoiceError(true); }
     }, (audio) => { void submit(audio); });
     void recording.current.start();
-  }, [cancelVoice, submit]);
+  }, [cancelVoice, submit, setVoicePhase]);
 
   const finishListening = useCallback(() => recording.current?.finish(), []);
+  const getVoiceAnalyser = useCallback(() => recording.current?.analyser ?? null, []);
 
   useEffect(() => {
     const onHidden = () => { if (document.hidden) cancelVoice(); };
@@ -82,17 +85,20 @@ export function useVoiceControl(snapshot: () => VoiceSnapshot, wsUrl: string, so
         setVoiceError(true);
       }
     }, 100);
-    window.addEventListener("blur", cancelVoice);
+    // Focus moves to the browser's own UI while the microphone permission prompt is open, so blur
+    // must not cancel a recording that is starting; it only stops robot actions and pending requests.
+    const onBlur = () => { if (phaseRef.current !== "recording" && phaseRef.current !== "requesting") cancelVoice(); };
+    window.addEventListener("blur", onBlur);
     window.addEventListener("pagehide", cancelVoice);
     document.addEventListener("visibilitychange", onHidden);
     return () => {
       window.clearInterval(timer);
-      window.removeEventListener("blur", cancelVoice);
+      window.removeEventListener("blur", onBlur);
       window.removeEventListener("pagehide", cancelVoice);
       document.removeEventListener("visibilitychange", onHidden);
       cancelVoice();
     };
   }, [cancelVoice, executor]);
 
-  return { voiceSupported, voicePhase, voiceMessage, voiceError, startListening, finishListening, cancelVoice };
+  return { voiceSupported, voicePhase, voiceMessage, voiceError, startListening, finishListening, cancelVoice, getVoiceAnalyser };
 }

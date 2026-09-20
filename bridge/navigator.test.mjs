@@ -69,6 +69,25 @@ assert.equal(run.navigator.state, "failed");
 assert.match(run.navigator.detail, /no walkable path/);
 console.log("PASS  wall across the whole arena: reports no walkable path");
 
+run = simulate({ start: { x: 0.2, y: 0.3, yaw: 0 }, goal: { x: 0.755, y: 0.3 } });
+assert.equal(run.navigator.state, "done");
+assert.ok(run.robot.x < arena.width - 0.05, "stops short of the wall");
+console.log("PASS  goal against the wall: goes to the nearest reachable spot and finishes");
+
+{
+  // A robot that keeps moving but never gets closer: the watchdog must end the mission.
+  const navigator = new Navigator(() => {});
+  navigator.start({ x: 0.6, y: 0.3 });
+  let now = 0;
+  for (; now < 90000 && !["failed", "done"].includes(navigator.state); now += 100) {
+    navigator.step({ x: 0.2 + 0.03 * Math.sin(now / 1000), y: 0.3, yaw: 0, tracking: true }, arena, [], now);
+  }
+  assert.equal(navigator.state, "failed");
+  assert.match(navigator.detail, /progress/);
+  assert.ok(now <= 60000);
+  console.log(`PASS  moving without getting closer: gives up after ${(now / 1000).toFixed(0)} s`);
+}
+
 run = simulate({ start: { x: 0.2, y: 0.3, yaw: 0 }, calibrate: true });
 const m = await run.pending;
 assert.ok(Math.abs(m.walkSpeed - 0.045) < 0.006 && Math.abs(m.turnRate - 0.55) < 0.06 && Math.abs(m.veer - 0.6) < 0.25, JSON.stringify(m));

@@ -5,7 +5,7 @@ import type { StateSource } from "./StateSource";
 export type SourceKind = "mock" | "ws";
 
 export const DEFAULT_SOURCE: SourceKind =
-  import.meta.env.VITE_SOURCE === "ws" ? "ws" : "mock";
+  import.meta.env.VITE_SOURCE === "mock" ? "mock" : "ws";
 
 const WS_URL_STORAGE_KEY = "sesame:wsUrl";
 const DEFAULT_WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8080/ws";

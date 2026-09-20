@@ -11,6 +11,8 @@ export class VoiceRecording {
   private context: AudioContext | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private meter: ReturnType<typeof setInterval> | undefined;
+  /** Live microphone signal for drawing a waveform; null unless the browser supports AudioContext. */
+  analyser: AnalyserNode | null = null;
 
   constructor(private update: (phase: RecordingPhase, error?: string) => void, private receive: (audio: Blob) => void) {}
 
@@ -87,6 +89,7 @@ export class VoiceRecording {
     this.stream = null;
     void this.context?.close().catch(() => {});
     this.context = null;
+    this.analyser = null;
     this.update("idle");
   }
 
@@ -98,6 +101,7 @@ export class VoiceRecording {
       void context.resume().catch(() => {});
       const analyser = context.createAnalyser();
       analyser.fftSize = 512;
+      this.analyser = analyser;
       context.createMediaStreamSource(stream).connect(analyser);
       const samples = new Float32Array(analyser.fftSize);
       let speechSamples = 0;

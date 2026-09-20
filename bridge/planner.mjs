@@ -170,5 +170,7 @@ export function planPath(start, goal, arena, obstacles, robotRadius = ROBOT_RADI
     path.push(points[j]);
     i = j;
   }
+  // The goal was in an unreachable spot (against a wall or inside an obstacle's clearance), so the path ends at the nearest reachable one.
+  path.goalMoved = goalMoved;
   return path;
 }

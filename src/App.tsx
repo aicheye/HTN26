@@ -1,12 +1,17 @@
 import { useState } from "react";
+import type { WorldState } from "./types/world";
 import { ControlPad } from "./components/ControlPad";
 import { MockSceneControls } from "./components/MockSceneControls";
 import { MapView, type Renderer } from "./components/MapView";
 import { CommandLog, Telemetry } from "./components/StatusPanel";
 import { useWorld } from "./state/StateProvider";
 import { VoiceControls } from "./components/VoiceControls";
+import { PanelSection } from "./components/PanelSection";
+import { TitleScreen } from "./components/TitleScreen";
+import { BlurredBackdrop } from "./components/BlurredBackdrop";
 import { CameraFeed } from "./components/CameraFeed";
 import { DEFAULT_CAMERA_URL } from "./state/cameraFeed";
+import { makeMockScenario } from "./data/mockScenarios";
 
 type Section = "controls" | "camera" | "telemetry" | "log" | "raw" | "settings";
 
@@ -24,6 +29,7 @@ export default function App() {
     send,
     cancelVoice,
   } = useWorld();
+  const [started, setStarted] = useState(false);
   const [mainView, setMainView] = useState<Renderer>("3d");
   const [cameraUrl, setCameraUrl] = useState<string | null>(null);
   const feedUrl = cameraUrl ?? state?.cameraFeedUrl ?? DEFAULT_CAMERA_URL;
@@ -37,8 +43,9 @@ export default function App() {
   const visible = SECTIONS.filter((s) => s.id !== "raw" || showDebug);
 
   return (
-    <div className="flex h-full">
-      <nav className="relative z-10 flex w-12 shrink-0 flex-col items-center gap-1 border-r border-zinc-800/60 bg-zinc-950 py-2 shadow-[4px_0_16px_rgba(0,0,0,0.35)]">
+    <div className="relative flex h-full">
+      <TitleScreen onStart={() => setStarted(true)} />
+      <nav className="relative z-20 flex w-12 shrink-0 flex-col items-center gap-1 border-r border-zinc-800 bg-zinc-950 py-2">
         {visible.map((s) => (
           <button
             key={s.id}
@@ -51,7 +58,7 @@ export default function App() {
               s.id === "settings" ? "mt-auto" : ""
             } ${
               section === s.id
-                ? "bg-zinc-100 text-zinc-900 shadow-md"
+                ? "bg-zinc-800 text-zinc-100"
                 : "text-zinc-500 hover:bg-zinc-800/80 hover:text-zinc-200"
             }`}
           >
@@ -60,14 +67,16 @@ export default function App() {
         ))}
       </nav>
 
+      {/* Overlays the map rather than resizing it, so the canvas never has to change size. */}
       <aside
-        className={`relative z-10 min-w-0 shrink-0 overflow-hidden border-r bg-zinc-900 shadow-[6px_0_24px_rgba(0,0,0,0.4)] transition-[width] duration-200 ${
-          section ? "w-64 border-zinc-800/60" : "w-0 border-transparent shadow-none"
+        aria-hidden={!section}
+        className={`absolute bottom-0 left-12 top-0 z-10 w-64 border-r border-zinc-800 bg-zinc-900 shadow-[8px_0_24px_-6px_rgba(0,0,0,0.55)] transition-[translate,visibility] duration-300 ease-out ${
+          section ? "visible translate-x-0" : "invisible -translate-x-full"
         }`}
       >
         <div className="flex h-full w-64 flex-col">
-          <div className="flex items-center justify-between border-b border-zinc-800/60 bg-zinc-900/95 px-4 py-2.5 backdrop-blur-sm">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
+          <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2.5">
+            <h2 className="text-sm font-medium text-zinc-200">
               {SECTIONS.find((s) => s.id === section)?.label}
             </h2>
             <button
@@ -88,11 +97,13 @@ export default function App() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto p-4">
-            {section === "controls" && <>
-              <ControlPad />
-              <VoiceControls />
-              <MockSceneControls />
-            </>}
+            {section === "controls" && (
+              <div className="space-y-6">
+                <PanelSection title="Drive"><ControlPad /></PanelSection>
+                <PanelSection title="Voice"><VoiceControls /></PanelSection>
+                <MockSceneControls />
+              </div>
+            )}
             {section === "camera" && (
               <div className="space-y-4 text-xs text-zinc-400">
                 <p>The camera loads only while this tab is open. Leaving it or hiding the browser tab stops requests immediately.</p>
@@ -187,7 +198,7 @@ export default function App() {
       </aside>
 
       <section className="relative min-w-0 flex-1 overflow-hidden bg-zinc-950">
-        {section === "camera" ? <CameraFeed url={feedUrl} /> : state ? (
+        {!started ? null : section === "camera" ? <div className="h-full pl-64"><CameraFeed url={feedUrl} /></div> : state && hasArena(state) ? (
           <>
             <MapView
               renderer={mainView}
@@ -221,9 +232,11 @@ export default function App() {
             </div>
           </>
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-zinc-500">
-            Waiting for first frame
-          </div>
+          <EmptyStage
+            title={status !== "live" ? "Connecting to the bridge" : state ? "Place the camera above the field" : "Waiting for the first frame"}
+            detail={status !== "live" ? "Check that the bridge is running and the WebSocket URL in Settings is correct."
+              : state ? "The map appears once the camera can see all four corner markers." : undefined}
+          />
         )}
       </section>
     </div>
@@ -321,6 +334,29 @@ function CodeIcon() {
         strokeLinejoin="round"
       />
     </svg>
+  );
+}
+
+/** The tracker reports a 0 x 0 arena until it has calibrated; drawing that would blow the corner markers up to fill the view. */
+function hasArena(state: { arena: { width: number; length: number } }) {
+  return state.arena.width > 0 && state.arena.length > 0;
+}
+
+/** An empty table with no robot or obstacles: a blurred 3D backdrop that hints at what will appear here. */
+const BACKDROP: WorldState = (() => {
+  const { robots: _r, obstacles: _o, arm: _a, goal: _g, path: _p, simulation: _s, ...scene } = makeMockScenario("empty");
+  return { ...scene, robots: [], obstacles: [] };
+})();
+
+function EmptyStage({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <div className="relative h-full w-full overflow-hidden">
+      <BlurredBackdrop state={BACKDROP} />
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-8 text-center">
+        <p className="text-base font-medium text-zinc-100">{title}</p>
+        {detail && <p className="max-w-xs text-sm leading-relaxed text-zinc-400">{detail}</p>}
+      </div>
+    </div>
   );
 }
 

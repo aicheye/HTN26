@@ -89,3 +89,13 @@ for (const from of [{ x: 0.2, y: 0.2 }, { x: 0.03, y: 0.03 }, { x: 0.6, y: 0.31 
   path.slice(from.x === 0.2 ? 0 : 1).forEach((p) => assert.ok(Math.min(p.x, square.width - p.x, p.y, square.length - p.y) >= EDGE_MARGIN_M - 0.011, `waypoint ${JSON.stringify(p)} is in the strip`));
 }
 console.log("PASS  closed strip along the edge: no waypoint in it, no walking into it, walking out allowed");
+
+// From Angus's branch: the navigator reports when the goal had to be moved, and a robot at the wall can leave.
+const nearWall = planPath({ x: 0.3, y: 0.3 }, { x: 0.755, y: 0.3 }, arena, []);
+assert.ok(nearWall.goalMoved && nearWall.at(-1).x <= arena.width - EDGE_MARGIN_M + 0.02, "goal against a wall is pulled back to reachable floor");
+assert.equal(planPath({ x: 0.3, y: 0.3 }, { x: 0.5, y: 0.3 }, arena, []).goalMoved, false);
+console.log("PASS  goal in the closed strip: moved to the nearest reachable spot");
+
+const escape = planPath({ x: 0.03, y: 0.3 }, { x: 0.5, y: 0.3 }, arena, []);
+assert.ok(escape && escape.at(-1).x === 0.5, "a robot already touching the wall can still leave");
+console.log("PASS  robot starting inside the closed strip can plan out of it");

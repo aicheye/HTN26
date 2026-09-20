@@ -1,5 +1,5 @@
 import { POSES, type PoseName } from "../types/world";
-import { MAX_PLAN_STEPS, VOICE_PULSE_MS, type VoiceIntent } from "./voiceCommands";
+import { MAX_PLAN_STEPS, MAX_TURN_DEG, MAX_WALK_CM, MIN_TURN_DEG, VOICE_PULSE_MS, type VoiceIntent } from "./voiceCommands";
 import type { VoiceSnapshot } from "./voiceSession";
 
 export function voiceEndpoint(wsUrl: string): string {
@@ -16,8 +16,16 @@ export function validateVoiceIntent(value: unknown): VoiceIntent | null {
   const intent = value as Record<string, unknown>;
   const keys = Object.keys(intent).sort().join(",");
   if (intent.type === "stop" && keys === "type") return { type: "stop" };
-  if (["forward", "backward", "left", "right"].includes(intent.type as string) && keys === "durationMs,type" && intent.durationMs === VOICE_PULSE_MS) {
-    return { type: intent.type as "forward" | "backward" | "left" | "right", durationMs: VOICE_PULSE_MS };
+  if (["forward", "backward", "left", "right"].includes(intent.type as string) && intent.durationMs === VOICE_PULSE_MS) {
+    const turning = intent.type === "left" || intent.type === "right";
+    if (keys === "durationMs,type") return { type: intent.type as "forward" | "backward" | "left" | "right", durationMs: VOICE_PULSE_MS };
+    const amount = turning ? intent.angleDeg : intent.distanceCm;
+    const [min, max] = turning ? [MIN_TURN_DEG, MAX_TURN_DEG] : [1, MAX_WALK_CM];
+    if (keys === (turning ? "angleDeg,durationMs,type" : "distanceCm,durationMs,type") && typeof amount === "number" && Number.isFinite(amount) && amount >= min && amount <= max) {
+      return turning ? { type: intent.type as "left" | "right", durationMs: VOICE_PULSE_MS, angleDeg: amount }
+        : { type: intent.type as "forward" | "backward", durationMs: VOICE_PULSE_MS, distanceCm: amount };
+    }
+    return null;
   }
   if (intent.type === "pose" && keys === "pose,type" && POSES.includes(intent.pose as PoseName)) return { type: "pose", pose: intent.pose as PoseName };
   if (intent.type === "goto" && typeof intent.name === "string" && intent.name.trim() && intent.name.length <= 80) {
@@ -47,6 +55,7 @@ export async function requestVoice(audio: Blob, snapshot: VoiceSnapshot, wsUrl: 
   if (source === "mock") {
     const robot = snapshot.state?.robots.find((r) => r.id === snapshot.robotId);
     body.set("scene", JSON.stringify({ robot: robot ? { id: robot.id, x: robot.x, y: robot.y, yaw: robot.yaw } : null,
+      arena: snapshot.state ? { width: snapshot.state.arena.width, length: snapshot.state.arena.length } : null,
       obstacles: (snapshot.state?.obstacles ?? []).slice(0, 50).map(({ id, x, y, color, shape, width, length, radius, height }) => ({ id, x, y, color, shape, width, length, radius, height })) }));
   }
   const endpoint = voiceEndpoint(wsUrl);

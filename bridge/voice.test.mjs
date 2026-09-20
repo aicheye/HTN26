@@ -6,7 +6,7 @@ import { createVoiceHandler, interpretVoice } from "./voice.mjs";
 const scene = { robot: { id: "sesame-1", x: 0.2, y: 0.3, yaw: 0 }, obstacles: [{ id: "chocolate-1", x: 0.5, y: 0.3, color: "#654321" }] };
 const audio = new Blob(["test audio"], { type: "audio/webm" });
 const transcript = (text) => ({ text, duration: 2, segments: [{ no_speech_prob: 0.01, avg_logprob: -0.1 }] });
-const step = (action, extra = {}) => ({ action, pose: "", obstacleId: "", relation: "", ...extra });
+const step = (action, extra = {}) => ({ action, pose: "", obstacleId: "", relation: "", amount: 0, unit: "", ...extra });
 const plan = (...steps) => ({ choices: [{ message: { content: JSON.stringify({ steps, reason: "" }) } }] });
 const refusal = (reason) => ({ choices: [{ message: { content: JSON.stringify({ steps: [], reason }) } }] });
 const completion = (action, extra = {}) => plan(step(action, action === "goto" && !extra.relation ? { relation: "at", ...extra } : extra));
@@ -183,4 +183,41 @@ test("A spoken answer is interpreted together with the question that prompted it
   const plain = groq([transcript("forward"), completion("forward")]);
   await interpretVoice({ audio, scene, clarification: { transcript: 5 }, apiKey: "test-only", fetchImpl: plain.fetchImpl });
   assert.ok(!("earlierRequest" in JSON.parse(JSON.parse(plain.calls[1].body).messages[1].content)));
+});
+
+test("Spoken amounts become measured turns and walks, converted and range-checked", async () => {
+  const mock = groq([transcript("Turn to the right and walk 5 steps"), plan(step("right", { amount: 90, unit: "degrees" }), step("forward", { amount: 5, unit: "steps" }))]);
+  const result = await interpretVoice({ audio, scene, apiKey: "test-only", fetchImpl: mock.fetchImpl });
+  assert.deepEqual(result.plan, [{ type: "right", durationMs: 500, angleDeg: 90 }, { type: "forward", durationMs: 500, distanceCm: 25 }]);
+  for (const [extra, expected] of [[{ amount: 0.2, unit: "meters" }, 20], [{ amount: 4, unit: "inches" }, 10.2], [{ amount: 12, unit: "cm" }, 12]]) {
+    const one = groq([transcript("Walk"), plan(step("backward", extra))]);
+    assert.equal((await interpretVoice({ audio, scene, apiKey: "test-only", fetchImpl: one.fetchImpl })).plan[0].distanceCm, expected);
+  }
+});
+
+test("Out-of-range or mismatched amounts are refused with a useful message", async () => {
+  for (const bad of [step("forward", { amount: 100, unit: "steps" }), step("left", { amount: 2, unit: "degrees" }), step("left", { amount: 400, unit: "degrees" })]) {
+    const mock = groq([transcript("Move a lot"), plan(bad)]);
+    await assert.rejects(interpretVoice({ audio, scene, apiKey: "test-only", fetchImpl: mock.fetchImpl }), /out of range/);
+  }
+  for (const bad of [step("left", { amount: 30, unit: "steps" }), step("forward", { amount: 30, unit: "degrees" }), step("forward", { amount: 30 }), step("forward", { unit: "cm" }), step("pose", { pose: "wave", amount: 5, unit: "steps" })]) {
+    const mock = groq([transcript("Move"), plan(bad)]);
+    await assert.rejects(interpretVoice({ audio, scene, apiKey: "test-only", fetchImpl: mock.fetchImpl }), /unsupported/);
+  }
+});
+
+test("Corners are offered to Groq with map-view labels and robot-relative offsets", async () => {
+  const cornerScene = { robot: { id: "sesame-1", x: 0.2, y: 0.3, yaw: Math.PI / 2 }, arena: { width: 0.6, length: 0.6 }, obstacles: [] };
+  const mock = groq([transcript("Go to the top left corner"), plan(step("goto", { obstacleId: "corner-top-left", relation: "at" }))]);
+  const result = await interpretVoice({ audio, scene: cornerScene, apiKey: "test-only", fetchImpl: mock.fetchImpl });
+  assert.deepEqual(result.plan, [{ type: "goto", name: "corner-top-left", relation: "at" }]);
+  const request = JSON.parse(mock.calls[1].body);
+  const { corners } = JSON.parse(request.messages[1].content).scene;
+  assert.equal(corners.length, 4);
+  assert.match(corners.find((c) => c.id === "corner-top-left").onMap, /top left/);
+  // robot at (0.2, 0.3) facing +y: the top-left corner (0, 0.6) is 30 cm ahead and 20 cm to the left
+  const topLeft = corners.find((c) => c.id === "corner-top-left");
+  assert.equal(topLeft.forwardCm, 30);
+  assert.equal(topLeft.leftCm, 20);
+  assert.ok(request.response_format.json_schema.schema.properties.steps.items.properties.obstacleId.enum.includes("corner-bottom-right"));
 });

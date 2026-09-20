@@ -7,5 +7,7 @@ export type MapProps = {
   showCameraLayer?: boolean;
   /** Thumbnail mode: no overlay controls, no chrome, not interactive. */
   compact?: boolean;
+  /** With compact: slowly circle the board at a 30 degree elevation instead of holding a fixed angle. */
+  orbit?: boolean;
   onPickGoal?: (p: Point) => void;
 };
