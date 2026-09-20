@@ -3,6 +3,8 @@ import type { MapProps } from "./MapProps";
 import { armGeometry, displayRobot, origin, projectedOutline, sesameTopView, type Solid } from "../robot/geometry";
 import { cornerTags, markerImage, obstacleImage, tableBorder, woodCanvas } from "./sceneSurface";
 import {
+  CLOSED_STRIP,
+  closedStrip,
   DANGER_M,
   FLOOR_EDGE,
   GRID,
@@ -172,6 +174,26 @@ function drawFloor(ctx: CanvasRenderingContext2D, state: WorldState, v: View) {
   ctx.lineWidth = 2;
   ctx.strokeRect(x, y, wpx, hpx);
   ctx.restore();
+
+  // The strip that is closed to the robot, tinted from the table's edge inward, and the dashed limit its centre
+  // keeps to. A goal clicked outside the dashed line is moved onto it by the planner.
+  const closed = closedStrip(state.arena);
+  if (closed) {
+    const strip = closed.strip * v.scale, limit = closed.limit * v.scale;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x - border, y - border, wpx + border * 2, hpx + border * 2);
+    ctx.rect(x + strip, y + strip, wpx - strip * 2, hpx - strip * 2);
+    ctx.globalAlpha = 0.14;
+    ctx.fillStyle = CLOSED_STRIP;
+    ctx.fill("evenodd");
+    ctx.globalAlpha = 0.75;
+    ctx.strokeStyle = CLOSED_STRIP;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(x + limit, y + limit, wpx - limit * 2, hpx - limit * 2);
+    ctx.restore();
+  }
 }
 
 /** Fixed calibration markers use the same ArUco artwork as the printed sheets. */

@@ -7,6 +7,8 @@ import { MetricArm as ArmModel, Solids } from "./MetricModels";
 import { displayRobot, sesameGeometry } from "../robot/geometry";
 import { cornerTags, markerUrls, tableBorder, woodCanvas } from "./sceneSurface";
 import {
+  CLOSED_STRIP,
+  closedStrip,
   FLOOR,
   FLOOR_EDGE,
   ROBOT_FITTING,
@@ -308,6 +310,38 @@ function Ground({
         ]}
         color={FLOOR_EDGE}
         lineWidth={2}
+      />
+      <ClosedStrip arena={arena} />
+    </>
+  );
+}
+
+/** The strip along the table's edge that is closed to the robot, and the dashed limit its centre keeps to. */
+function ClosedStrip({ arena }: { arena: Arena }) {
+  const closed = closedStrip(arena);
+  const border = tableBorder(arena);
+  const ring = useMemo(() => {
+    if (!closed) return null;
+    const shape = new THREE.Shape()
+      .moveTo(-border, -border).lineTo(arena.width + border, -border)
+      .lineTo(arena.width + border, arena.length + border).lineTo(-border, arena.length + border).closePath();
+    const s = closed.strip;
+    shape.holes.push(new THREE.Path()
+      .moveTo(s, s).lineTo(s, arena.length - s).lineTo(arena.width - s, arena.length - s).lineTo(arena.width - s, s).closePath());
+    return new THREE.ShapeGeometry(shape);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closed?.strip, border, arena.width, arena.length]);
+  useEffect(() => () => ring?.dispose(), [ring]);
+  if (!closed || !ring) return null;
+  const m = closed.limit;
+  return (
+    <>
+      <mesh geometry={ring} position={[0, 0, 0.0012]}>
+        <meshBasicMaterial color={CLOSED_STRIP} transparent opacity={0.16} depthWrite={false} />
+      </mesh>
+      <Line
+        points={[[m, m, 0.0022], [arena.width - m, m, 0.0022], [arena.width - m, arena.length - m, 0.0022], [m, arena.length - m, 0.0022], [m, m, 0.0022]]}
+        color={CLOSED_STRIP} lineWidth={1.5} dashed dashSize={0.012} gapSize={0.008} transparent opacity={0.8}
       />
     </>
   );

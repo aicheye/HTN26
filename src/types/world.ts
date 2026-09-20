@@ -146,6 +146,9 @@ export type WorldState = {
     width: number; // x extent, meters
     length: number; // y extent, meters
     cornerTagIds?: number[]; // fixed calibration tags
+    // Set by the bridge when the strip of table that holds the corner tags is closed to the robot: the robot's
+    // centre stays this far inside the arena. Both maps draw the strip and this limit.
+    edgeMargin?: number;
   };
   calibration?: { ok: boolean; reprojectionError?: number };
   cameraFeedUrl?: string; // optional MJPEG/video for the toggle layer
