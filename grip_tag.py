@@ -23,7 +23,7 @@ from sesame_tracker import Tracker, ensure_trackers, open_camera_page
 from so101_ik import JOINTS, ik, fk
 from so101_safe import default_port
 
-OPEN_DEFAULT, CLOSED = 60.0, 0.0     # open well wider than the body so the jaws land around the two lips even a cm or two off
+OPEN_DEFAULT, CLOSED = 45.0, 0.0     # wider than the body so the jaws land around the two lips a cm or two off (60 was too wide)
 PITCHES = [-90, -85, -80, -75, -70, -65, -60, -55, -50, -45, -40]
 
 
@@ -53,7 +53,8 @@ def main():
     ap.add_argument("--jaw-angle", type=float, default=90.0, help="jaw axis relative to the tag's top edge: 90 = across the tag (the lips are at its left and right edges); 0 if the tag is stuck rotated 90 deg on the body")
     ap.add_argument("--open", type=float, default=OPEN_DEFAULT, help="gripper opening before the grip (0 closed .. 100 fully open)")
     ap.add_argument("--tag-offset", type=float, nargs=2, metavar=("AHEAD", "LEFT"), default=[0.0, 0.0], help="the arm's base relative to its tag (cm)")
-    ap.add_argument("--hover", type=float, default=5.0); ap.add_argument("--lift", type=float, default=5.0)
+    ap.add_argument("--hover", type=float, default=5.0); ap.add_argument("--lift", type=float, default=10.0, help="cm to lift after the grip")
+    ap.add_argument("--carry", type=float, nargs=2, metavar=("DX", "DY"), default=[0.0, 10.0], help="cm to carry the Sesame at the lifted height, ahead and left in the arm's frame, before setting it down")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -89,8 +90,18 @@ def main():
     q_lift, p_lift = solve(x, y, args.grip_z + args.lift, jaw)
     if q_hover is None or q_lift is None:
         print("   IK: the hover/lift height above the target is unreachable; lower --hover/--lift"); return 1
+    # the drop point: --carry from the pick at the lifted height, then down to the grip height; if that is out of
+    # reach, try the same distance the other way, then closer, then set it down where it was picked up
+    drop = None
+    for dx, dy in ([tuple(args.carry), (args.carry[0], -args.carry[1]), (-args.carry[1] * 0.0 - 6.0, 0.0), (0.0, 0.0)]):
+        q_c, p_c = solve(x + dx, y + dy, args.grip_z + args.lift, jaw)
+        q_d, p_d = solve(x + dx, y + dy, args.grip_z, jaw)
+        if q_c is not None and q_d is not None:
+            drop = (dx, dy, q_c, q_d); break
+    dx, dy, q_carry, q_drop = drop
     f = fk(q_grip)
     print(f"4. IK: grip pitch {pitch} deg" + (" (straight down)" if pitch == -90 else " (tilted to reach)") + f", hover pitch {p_hover}, lift pitch {p_lift}")
+    print(f"   after the grip: lift {args.lift:.0f} cm, carry {dx:+.0f} cm ahead / {dy:+.0f} cm left to x={x+dx:.1f} y={y+dy:.1f}, lower, let go, lift, rest")
     print(f"   joints at the grip: " + "  ".join(f"{j.split('_')[0]}={q_grip[j]:.1f}" for j in JOINTS))
     got = (f["jaw_yaw"] - tag_rel + 180) % 360 - 180
     ok = min(abs(got - args.jaw_angle), abs((got - args.jaw_angle + 180) % 360 - 180)) < 0.5   # +-180 is the same jaw axis
@@ -110,16 +121,29 @@ def main():
         for q, g in line(q_grip, q_grip, 1.0, args.open, CLOSED):
             arm.send(q, g); time.sleep(1 / FPS)
         time.sleep(0.5)
-        print("   lift")
-        for q, g in line(q_grip, q_lift, 2.0, CLOSED):
+        print(f"   lift {args.lift:.0f} cm")
+        for q, g in line(q_grip, q_lift, 2.5, CLOSED):
             arm.send(q, g); time.sleep(1 / FPS)
-        time.sleep(0.5)
+        time.sleep(0.3)
+        print(f"   carry to x={x+dx:.1f} y={y+dy:.1f}")
+        for q, g in line(q_lift, q_carry, 3.0, CLOSED):
+            arm.send(q, g); time.sleep(1 / FPS)
+        print("   lower")
+        for q, g in line(q_carry, q_drop, 2.5, CLOSED):
+            arm.send(q, g); time.sleep(1 / FPS)
+        print("   let go")
+        for q, g in line(q_drop, q_drop, 1.0, CLOSED, args.open):
+            arm.send(q, g); time.sleep(1 / FPS)
+        time.sleep(0.3)
+        print("   lift away")
+        for q, g in line(q_drop, q_carry, 2.0, args.open):
+            arm.send(q, g); time.sleep(1 / FPS)
         after = tracker.wait_for_robot(10.0, say=None)
         if after:
             moved = np.hypot(after["robot"]["x"] - r["x"], after["robot"]["y"] - r["y"])
-            print(f"   the Sesame's tag moved {moved:.1f} cm during the lift: " + ("GRIP WORKED" if moved > 2.0 else "grip missed"))
-        print("   back to rest (still holding)")
-        go_home(arm, CLOSED)
+            print(f"   the Sesame's tag moved {moved:.1f} cm from where it was picked up: " + ("GRIP WORKED" if moved > 3.0 else "it did not come along: grip missed"))
+        print("   back to rest")
+        go_home(arm, GRIPPER_REST)
     finally:
         arm.close(False)
     return 0
