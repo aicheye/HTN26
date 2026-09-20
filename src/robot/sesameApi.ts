@@ -34,6 +34,9 @@ export function toSesamePayload(c: Command): SesamePayload | null {
     // goto is planner-level; the navigation layer turns it into forward/left/right.
     case "goto":
       return null;
+    // play switches behaviours in the bridge. The firmware knows nothing of it.
+    case "play":
+      return null;
   }
 }
 

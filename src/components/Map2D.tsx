@@ -18,6 +18,7 @@ import {
   distanceTo,
 } from "./mapShared";
 import type { Obstacle, Point, Robot, WorldState } from "../types/world";
+import { trail } from "../state/trail";
 
 const PADDING = 20; // px around the arena
 
@@ -139,6 +140,7 @@ function render(
   state.obstacles.forEach((o) =>
     drawObstacle(ctx, o, v, tracked ? distanceTo(o, tracked) < DANGER_M : false),
   );
+  drawTrail(ctx, v);
   drawPath(ctx, state.path, v);
   if (state.goal) drawGoal(ctx, state.goal, v);
   state.robots.forEach((r) => drawRobot(ctx, r, v, isCarried(state.arm, r.id)));
@@ -312,6 +314,24 @@ function drawObstacle(
   ctx.lineWidth = danger ? 2.5 : 1;
   if (o.height === undefined) ctx.setLineDash([4, 3]);
   ctx.stroke();
+  ctx.restore();
+}
+
+/** Where the robot has walked, fading out toward the oldest part. */
+function drawTrail(ctx: CanvasRenderingContext2D, v: View) {
+  const points = trail();
+  if (points.length < 2) return;
+  ctx.save();
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  for (let i = 1; i < points.length; i++) {
+    const [x0, y0] = toPx(points[i - 1], v), [x1, y1] = toPx(points[i], v);
+    ctx.strokeStyle = `rgba(37, 99, 235, ${0.08 + 0.5 * (i / points.length)})`;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 

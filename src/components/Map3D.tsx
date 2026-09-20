@@ -6,6 +6,7 @@ import type { MapProps } from "./MapProps";
 import { MetricArm as ArmModel, Solids } from "./MetricModels";
 import { displayRobot, sesameGeometry } from "../robot/geometry";
 import { cornerTags, markerUrls, tableBorder, woodCanvas } from "./sceneSurface";
+import { trail } from "../state/trail";
 import {
   EDGE_LIMIT,
   edgeLimit,
@@ -105,6 +106,9 @@ export function Map3D({
           {state.robots.map((r) => (
             <RobotModel key={r.id} robot={r} carried={isCarried(state.arm, r.id)} />
           ))}
+          {!compact && trail().length > 1 && (
+            <Line points={trail().map((p) => [p.x, p.y, 0.004] as [number, number, number])} color="#2563eb" lineWidth={3} transparent opacity={0.45} />
+          )}
           {state.arm && <ArmModel arm={state.arm} />}
         </group>
 

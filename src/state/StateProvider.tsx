@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { clearTrail, recordTrail } from "./trail";
 import {
   createSource,
   MockSource,
@@ -45,6 +46,7 @@ type StateContextValue = ReturnType<typeof useVoiceControl> & {
   send: (type: CommandType, extra?: Partial<Command>) => void;
   resetMockScenario: (id: MockScenarioId) => void;
   runMockTest: () => void;
+  addMockObject: () => void;
 };
 
 const StateContext = createContext<StateContextValue | null>(null);
@@ -160,6 +162,7 @@ export function StateProvider({ children }: { children: ReactNode }) {
       }
     });
     const unsubState = source.subscribe((s) => {
+      recordTrail(s.robots[0]);
       worldRef.current = s;
       receivedRef.current = Date.now();
       setState(s);
@@ -190,12 +193,16 @@ export function StateProvider({ children }: { children: ReactNode }) {
   }, [cancelVoice, dispatch]);
   const resetMockScenario = useCallback((id: MockScenarioId) => {
     cancelVoice();
+    clearTrail();
     if (sourceRef.current instanceof MockSource) sourceRef.current.resetScenario(id);
   }, [cancelVoice]);
   const runMockTest = useCallback(() => {
     cancelVoice();
     if (sourceRef.current instanceof MockSource) sourceRef.current.runScenarioTest();
   }, [cancelVoice]);
+  const addMockObject = useCallback(() => {
+    if (sourceRef.current instanceof MockSource) sourceRef.current.addRandomObject();
+  }, []);
 
   const value: StateContextValue = {
     ...voice,
@@ -213,6 +220,7 @@ export function StateProvider({ children }: { children: ReactNode }) {
     send,
     resetMockScenario,
     runMockTest,
+    addMockObject,
   };
 
   return <StateContext.Provider value={value}>{children}</StateContext.Provider>;

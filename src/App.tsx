@@ -6,6 +6,7 @@ import { MapView, type Renderer } from "./components/MapView";
 import { CommandLog, Telemetry } from "./components/StatusPanel";
 import { useWorld } from "./state/StateProvider";
 import { VoiceControls } from "./components/VoiceControls";
+import { PlayControls } from "./components/PlayControls";
 import { PanelSection } from "./components/PanelSection";
 import { TitleScreen } from "./components/TitleScreen";
 import { BlurredBackdrop } from "./components/BlurredBackdrop";
@@ -101,6 +102,7 @@ export default function App() {
               <div className="space-y-6">
                 <PanelSection title="Drive"><ControlPad /></PanelSection>
                 <PanelSection title="Voice"><VoiceControls /></PanelSection>
+                <PlayControls />
                 <MockSceneControls />
               </div>
             )}

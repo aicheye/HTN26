@@ -17,6 +17,7 @@ import net from "node:net";
 import { pathToFileURL } from "node:url";
 import { WebSocketServer } from "ws";
 import { pixelToFloor } from "../pi/client/floor.js";
+import { Behaviours, isArmDetection } from "./behaviours.mjs";
 import { GaitEngine } from "./gait.mjs";
 import { Navigator } from "./navigator.mjs";
 import { EDGE_MARGIN_M, ROBOT_RADIUS_M, costmap, leavesArena } from "./planner.mjs";
@@ -80,6 +81,25 @@ function move(command, face = {}, steer = 0) {
   return robotSocket?.readyState === WebSocket.OPEN;
 }
 const navigator = new Navigator((command, steer) => move(command, {}, steer), savedMotion);
+// What the robot does by itself: moods, curiosity, a tour of the table, and a diary (behaviours.mjs). Each has a
+// switch, set with the "play" command from the web UI or POST /play {"moods": true, "curious": false, "tour": true}.
+const behaviours = new Behaviours({
+  goto: (target) => navigator.start(target),
+  face: (face) => sendToRobot({ face }),
+  pose: (pose) => { gaitEngine.set("stop"); sendToRobot({ command: pose }); },
+  ignore: (obstacle) => isArmDetection(obstacle, lastArm),
+});
+function play(options) {
+  const { tour, ...switches } = options;
+  behaviours.configure(Object.fromEntries(Object.entries(switches).filter(([key]) => ["moods", "curious", "diary"].includes(key)).map(([key, value]) => [key, Boolean(value)])));
+  if (tour === false) { behaviours.interrupt(); navigator.cancel(); }
+  if (tour === true && latestState?.robots[0]) {
+    const objects = latestState.obstacles.filter((o) => o.source === "cv" && !isArmDetection(o, lastArm));
+    behaviours.startTour(objects, latestState.robots[0], Date.now());
+  }
+  return behaviours.status();
+}
+
 // When goto finds no walkable path, the arm is asked to lift the robot to a place it can reach the goal from. The
 // request waits here for whatever drives the arm (arm_carry.py) to fetch it with GET /carry and answer it with
 // POST /carry. The arm's own planner decides whether it reaches a drop point, so several are offered, the ones
@@ -204,6 +224,7 @@ function buildState() {
       trackerFps: tracker?.fps ?? 0, floorMarkers: tracker?.floorMarkers ?? 0, robotConnected: robotSocket?.readyState === WebSocket.OPEN,
       ...(carry ? { carry: { id: carry.id, drops: carry.drops } } : {}),
     },  // not part of the frontend schema: navigation state for display and debugging
+    play: behaviours.status(),  // not part of the frontend schema either: what the robot does by itself, and the diary
   };
 }
 
@@ -211,6 +232,8 @@ function handleCommand(command) {
   const ack = (ok, error) => ({ commandId: command.id, ok, ...(error ? { error } : {}) });
   const face = command.face ? { face: command.face } : {};
   let sent;
+  if (command.type === "play") { play(command.play ?? {}); return ack(true); }
+  behaviours.interrupt();  // any other command is the user taking over from whatever the robot was up to
   if (command.type === "goto") {
     if (!command.target) return ack(false, "goto needs a target");
     navigator.start(command.target);
@@ -275,6 +298,13 @@ const server = http.createServer((request, response) => {
   }
   if (request.url === "/objects" && request.method === "GET") return reply(200, cvObstacles);
   // The planner's grid for the telemetry panel: what is blocked, and what walking through each free cell costs.
+  if (request.url === "/play" && request.method === "GET") return reply(200, behaviours.status());
+  if (request.url === "/play" && request.method === "POST") {
+    let text = "";
+    request.on("data", (chunk) => { text += chunk; });
+    request.on("end", () => { try { reply(200, play(JSON.parse(text || "{}"))); } catch (error) { reply(400, { error: error.message }); } });
+    return;
+  }
   if (request.url === "/costmap" && request.method === "GET") {
     const state = latestState ?? buildState();
     return reply(200, costmap(state.arena, state.obstacles, robotRadius));
@@ -389,6 +419,7 @@ setInterval(() => {
   if (state.robots[0]?.tracking && leavesArena(state.robots[0], state.arena, walk)) { edgeStops++; move("stop"); }
   navigator.arm = lastArm ? { base: lastArm, reach: ARM_REACH_M } : null;
   navigator.step(state.robots[0], state.arena, state.obstacles);
+  behaviours.step({ robot: state.robots[0], obstacles: state.obstacles, mission: navigator.status() });
   if (navigator.state !== "carrying") carry = null;  // cancelled, timed out, or answered
   const message = JSON.stringify({ type: "state", data: state });
   for (const socket of sockets.clients) if (socket.readyState === WebSocket.OPEN) socket.send(message);

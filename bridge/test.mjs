@@ -37,6 +37,9 @@ const near = (a, b, tolerance = 1e-6) => assert.ok(Math.abs(a - b) < tolerance, 
 
 try {
   await wait(1500);
+  // The tests below check exactly what reaches the robot, so the faces and poses of the moods are switched off
+  // for them. The last test switches them back on.
+  await fetch("http://127.0.0.1:18080/play", { method: "POST", body: JSON.stringify({ moods: false }) });
   const client = new WebSocket("ws://127.0.0.1:18080/ws");
   const states = [], acks = [];
   client.onmessage = (event) => {
@@ -199,6 +202,26 @@ try {
   client.send(JSON.stringify({ type: "command", data: { id: "e3", ts: 0, robotId: "sesame-1", type: "stop" } }));
   await wait(200);
   console.log("PASS  limit at the edge: forward toward the edge is refused and stopped, forward away from it is accepted");
+  // Play: with moods on, arriving shows a happy face and a wave, and a manual command ends a tour.
+  await fetch("http://127.0.0.1:18080/obstacles", { method: "POST", body: JSON.stringify([
+    { id: "green-box-1", label: "green box", source: "cv", shape: "rect", x: 0.3, y: 0.4, width: 0.06, length: 0.06 }]) });
+  let playStatus = await (await fetch("http://127.0.0.1:18080/play", { method: "POST", body: JSON.stringify({ moods: true }) })).json();
+  assert.equal(playStatus.moods, true);
+  robotPose = { ...robotPose, x: 50, y: 30, heading: 180 };
+  await wait(1500);
+  robotMessages.length = 0;
+  client.send(JSON.stringify({ type: "command", data: { id: "p1", ts: 0, robotId: "sesame-1", type: "play", play: { tour: true } } }));
+  await wait(600);
+  assert.deepEqual(states.at(-1).play.tour, { visited: 1, total: 1 });
+  assert.equal(states.at(-1).play.errand.label, "green box");
+  assert.equal(states.at(-1).mission.state, "navigating");
+  assert.ok(robotMessages.some((m) => m.face === "excited"), "setting off shows the excited face");
+  client.send(JSON.stringify({ type: "command", data: { id: "p2", ts: 0, robotId: "sesame-1", type: "stop" } }));
+  await wait(400);
+  assert.equal(states.at(-1).play.tour, null, "a manual command ends the tour");
+  assert.match(states.at(-1).play.diary.map((d) => d.text).join(" | "), /Setting off on a tour of 1 thing/);
+  await fetch("http://127.0.0.1:18080/play", { method: "POST", body: JSON.stringify({ moods: false }) });
+  console.log("PASS  play: a tour sets off to the object with an excited face, the diary records it, stop ends it");
   client.close();
 
   // A second bridge whose tracker never answers, as when the camera is off or sees no marker. The robot is

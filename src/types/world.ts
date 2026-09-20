@@ -154,6 +154,7 @@ export type WorldState = {
 
   robots: Robot[];
   obstacles: Obstacle[];
+  play?: PlayStatus;
   hiddenObstacles?: Obstacle[]; // detected, avoided by the planner, but not drawn: the camera's detection of the arm
   // The bridge's navigation state, for display. "carrying": goto found no walkable path and waits for the arm to
   // lift the robot to one of `carry.drops`, from where the goal can be walked to.
@@ -175,7 +176,8 @@ export type CommandType =
   | "stop"
   | "goto"
   | "pose"
-  | "face";
+  | "face"
+  | "play";
 
 export type Command = {
   id: string; // unique, used to match the ack
@@ -187,6 +189,15 @@ export type Command = {
   target?: Point; // required when type = "goto"
   pose?: PoseName; // required when type = "pose"
   face?: FaceName; // required when type = "face", optional on any other command
+  /** type = "play": switches for what the robot does by itself. tour true starts one, false ends it. */
+  play?: { moods?: boolean; curious?: boolean; diary?: boolean; tour?: boolean };
+};
+
+/** What the robot does by itself (bridge/behaviours.mjs), and its diary of the table, newest first. */
+export type PlayStatus = {
+  moods: boolean; curious: boolean; diary: { at: number; text: string; kind: "table" | "robot" }[];
+  tour: { visited: number; total: number } | null;
+  errand: { label: string; kind: "curious" | "tour" } | null;
 };
 
 export type Ack = { commandId: string; ok: boolean; error?: string };

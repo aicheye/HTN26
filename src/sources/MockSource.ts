@@ -22,6 +22,7 @@ import type { ConnectionStatus, StateSource } from "./StateSource";
 // bridge would do: the same paths, limits, stuck recovery, walk to the arm's reach, and carry request.
 import { Navigator } from "../../bridge/navigator.mjs";
 import { EDGE_MARGIN_M } from "../../bridge/planner.mjs";
+import { Behaviours } from "../../bridge/behaviours.mjs";
 
 const TICK_MS = 50; // ~20 Hz
 const LINEAR_SPEED = 0.45; // m/s at speed = 1
@@ -92,6 +93,8 @@ export class MockSource implements StateSource {
   private navSteer = 0;
   private navClockMs = 0;
   private navigator = this.makeNavigator();
+  // What the robot does by itself, from the same module as the bridge: moods, curiosity, a tour, and the diary.
+  private behaviours: Behaviours = this.makeBehaviours();
 
   private stateSubs = new Set<(s: WorldState) => void>();
   private ackSubs = new Set<(a: Ack) => void>();
@@ -110,8 +113,37 @@ export class MockSource implements StateSource {
     return navigator;
   }
 
+  private makeBehaviours(): Behaviours {
+    return new Behaviours({
+      goto: (target) => {
+        const command: Command = { id: `play-${Date.now()}`, ts: Date.now(), robotId: this.robot().id, type: "goto", target, speed: 0.3 };
+        this.active = { command, expiresAt: null };
+        this.state.goal = { ...target };
+        this.paused = false;
+        this.navDrive = "";
+        this.navigator.start({ ...target });
+      },
+      face: (face) => { this.robot().face = face; },
+      pose: (pose) => { const robot = this.robot(); robot.pose = pose as Robot["pose"]; this.poseUntil = Date.now() + POSE_DURATION_MS; },
+    }, this.behaviours ? { moods: this.behaviours.status().moods, curious: this.behaviours.status().curious } : undefined);
+  }
+
+  /** Drops a small box at a random free spot, for the curiosity and diary features. */
+  addRandomObject() {
+    const { width, length } = this.state.arena, colours = [["#d5a332", "yellow box"], ["#3f9b5c", "green box"], ["#bc4a41", "red box"], ["#7c5cc4", "purple box"]];
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const x = 0.12 + Math.random() * (width - 0.24), y = 0.12 + Math.random() * (length - 0.24);
+      if (Math.hypot(x - this.truth.x, y - this.truth.y) < 0.2 || this.state.obstacles.some((o) => distanceTo(o, { x, y }) < 0.12)) continue;
+      const [color, label] = colours[this.state.obstacles.length % colours.length];
+      this.state.obstacles = [...this.state.obstacles, { id: `dropped-${Date.now()}`, label, source: "cv", shape: "rect", x, y, yaw: Math.random() * Math.PI,
+        width: 0.05, length: 0.04, height: 0.03, color, confidence: 0.9 }];
+      return;
+    }
+  }
+
   resetScenario(id: MockScenarioId) {
     this.navigator = this.makeNavigator();
+    this.behaviours = this.makeBehaviours();
     this.navDrive = "";
     this.state = makeMockScenario(id);
     const r = this.robot();
@@ -203,6 +235,15 @@ export class MockSource implements StateSource {
       this.emitAck({ commandId: c.id, ok: false, error: "Reset the mock scene before resuming a paused lift" });
       return;
     }
+    if (c.type === "play") {
+      const { tour, ...switches } = c.play ?? {};
+      this.behaviours.configure(switches);
+      if (tour === false) { this.behaviours.interrupt(); this.navigator.cancel(); this.navDrive = ""; this.active = null; }
+      if (tour === true) this.behaviours.startTour(this.state.obstacles.filter((o) => o.source === "cv"), this.robot(), Date.now());
+      this.emitAck({ commandId: c.id, ok: true });
+      return;
+    }
+    this.behaviours.interrupt();  // any other command is the user taking over
     if (c.type !== "goto") { this.navigator.cancel(); this.navDrive = ""; }
     if (c.type === "stop") {
       this.active = null;
@@ -291,6 +332,8 @@ export class MockSource implements StateSource {
     robot.mode = mode;
     robot.tracking = true;
 
+    if (!this.paused) this.behaviours.step({ robot: { x: robot.x, y: robot.y, tracking: true }, obstacles: this.state.obstacles, mission: this.navigator.status() });
+    this.state.play = this.behaviours.status();
     // What the telemetry panel shows for the live bridge, from the same navigator.
     this.state.mission = { ...this.navigator.status(), robotRadius: this.navigator.robotRadius, drive: "mock", robotConnected: true };
     this.state.arena = { ...this.state.arena, edgeMargin: EDGE_MARGIN_M };
@@ -365,8 +408,12 @@ export class MockSource implements StateSource {
     const r = this.robot();
     const margin = Math.hypot(r.footprint.width, r.footprint.length) / 2;
 
-    const cx = clamp(nx, margin, width - margin);
-    const cy = clamp(ny, margin, length - margin);
+    // The mock's table ends where the planner's limit for the robot's centre is, less half a centimetre. With the
+    // robot's half-diagonal (9 cm) here and 7 cm in the planner, a goal on the limit could not be reached: the mock
+    // robot pushed against an invisible wall and the navigator called it stuck.
+    const edge = Math.min(margin, EDGE_MARGIN_M) - 0.005;
+    const cx = clamp(nx, edge, width - edge);
+    const cy = clamp(ny, edge, length - edge);
     const blocker = this.findBlocker(cx, cy, margin);
     this.lastBlockedBy = blocker ?? null;
     if (blocker) return;
