@@ -19,7 +19,7 @@ import numpy as np
 
 from replay_demo import Arm, FPS
 from sesame_pickup import READY, REST, GRIPPER_REST, go_home
-from sesame_tracker import Tracker
+from sesame_tracker import Tracker, alive_units, open_camera_page
 from so101_ik import JOINTS, ik, fk
 from so101_safe import default_port
 
@@ -54,10 +54,15 @@ def main():
     args = ap.parse_args()
 
     tracker = Tracker(args.tracker)
+    up = alive_units(tracker)
+    if not up:
+        print(f"no tracker answers at {tracker.host}: start them with  sh run.sh trackers  (or sh run.sh go once)"); return 1
+    print(f"camera view (cameras up: {up}): both tags, the Sesame's and the arm's, must be in one camera's view")
+    open_camera_page(tracker.host, units=up)                       # the same viewer as go: Sean's page, one tab per camera
     print(f"1. reading both tags from one camera at {tracker.host}...")
-    pair = tracker.observe_pair(min_samples=5, timeout=40.0)
+    pair = tracker.observe_pair(min_samples=5, timeout=60.0)
     if pair is None:
-        print("   no camera reported both the Sesame's tag and the arm's tag"); return 1
+        print("   no camera reported both the Sesame's tag and the arm's tag in 60 s: check the page"); return 1
     r, a = pair["robot"], pair["arm"]
     print(f"   camera {pair['unit']}, {pair['samples']} frames: Sesame tag at floor ({r['x']:.1f}, {r['y']:.1f}) heading {r['heading']:.1f}; "
           f"arm tag at ({a['x']:.1f}, {a['y']:.1f}) heading {a['heading']:.1f}")
