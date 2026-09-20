@@ -9,8 +9,8 @@ In order, skipping what is already done:
   2. arm frame: from the arm base tag (id 5) every run, no hands (--offset AHEAD LEFT / --turn adjust the
      assumed tag placement on the base). --selfcal instead measures frame and hinge offset with the arm
      holding the Sesame (one hand action).
-  3. grasp: the end effector goes 3 cm from the tag centre along its heading, to the hinge nearer the arm
-     (--hinge), jaws across the body
+  3. grasp: the end effector goes to the centre of the tag, jaws across the body (--hinge N to target a hinge
+     N cm from the centre instead)
   3. demo: if no demo has the tracker's tag pose at its grasp mark, run record_demo.py grip
   4. pickup: sesame_pickup.py with the newest tracked demo (space = go, p = plan, q = quit)
 Extra arguments after --now / the demo name go to sesame_pickup.py (for example --drop-offset 0 10).

@@ -309,7 +309,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("demo", nargs="?", default="auto", help="a recorded demo name, or 'auto' (default) to grip from the tag geometry")
     ap.add_argument("--grip-along", type=float, default=0.0, help="cm from the tag centre along its heading to the grip point (added to --hinge)")
-    ap.add_argument("--hinge", type=float, default=3.0, help="the hinges sit this far from the tag centre at either end along the heading; the nearer one to the arm is gripped (0 = grip at the centre)")
+    ap.add_argument("--hinge", type=float, default=0.0, help="0 (default): grip at the tag centre. N: the hinges sit N cm from the centre at either end along the heading; the nearer one to the arm is gripped")
     ap.add_argument("--grip-across", type=float, default=0.0, help="cm to the tag's left")
     ap.add_argument("--grip-above-tag", type=float, default=0.7, help="jaws close this many cm above the tag's reported height")
     ap.add_argument("--jaw-angle", type=float, default=90.0, help="jaw axis relative to the tag heading; 90 = across the body")
@@ -331,7 +331,8 @@ def main():
         print(f"grasp from the tag with the MEASURED hinge offset: tag {g['along']:+.1f} cm along the jaw axis, {g['left']:+.1f} cm left of the jaws, turned {g['heading_offset']:+.0f} deg (selfcal)")
     elif args.demo == "auto":
         demo = None
-        print(f"grasp from the tag: the nearer hinge {args.hinge:.1f} cm from the centre along the heading{f' {args.grip_along:+.1f}' if args.grip_along else ''}, {args.grip_across:+.1f} cm across, {args.grip_above_tag:+.1f} cm above the tag, jaws at {args.jaw_angle:.0f} deg")
+        where = f"the nearer hinge {args.hinge:.1f} cm from the centre along the heading" if args.hinge else "the tag CENTRE"
+        print(f"grasp from the tag: {where}{f' {args.grip_along:+.1f} along' if args.grip_along else ''}, {args.grip_across:+.1f} cm across, {args.grip_above_tag:+.1f} cm above the tag, jaws at {args.jaw_angle:.0f} deg")
     else:
         try:
             demo = load(args.demo)
