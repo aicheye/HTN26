@@ -4,6 +4,9 @@
 // robot in response to commands, then starts bridge.mjs pointed at both. The frontend connects to
 // ws://localhost:8080/ws exactly as it would with the real hardware.
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import net from "node:net";
 import { WebSocketServer } from "ws";
 
@@ -67,8 +70,13 @@ setInterval(() => {
   for (const socket of trackerClients) socket.write(line);
 }, STEP_MS);
 
+// The simulated robot only understands the firmware's walking commands, and its speeds are its own. The real
+// robot's saved settings (drive.json with the software gait, motion.json with measured speeds) therefore stay out:
+// the bridge gets an empty directory for its state. With drive mode "software" the bridge streamed servo poses,
+// the simulated robot never moved, and every goto ended as "stuck".
+const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-sim-"));
 const bridge = spawn("node", ["bridge.mjs"], {
-  env: { ...process.env, TRACKER_HOST: "127.0.0.1", TRACKER_PORT: "9003", ROBOT_URL: "ws://127.0.0.1:8081" },
+  env: { ...process.env, BRIDGE_STATE_DIR: stateDir, TRACKER_HOST: "127.0.0.1", TRACKER_PORT: "9003", ROBOT_URL: "ws://127.0.0.1:8081" },
   stdio: "inherit",
 });
 const stop = () => { bridge.kill(); process.exit(0); };
