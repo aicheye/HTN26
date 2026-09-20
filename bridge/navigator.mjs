@@ -33,6 +33,8 @@ const RECOVER_TURN_MS = 1200;
 const MAX_RECOVERIES = 3;
 const MAX_FAILED_PLANS = 3;
 const LOST_TIMEOUT_MS = 10000;
+const NO_PROGRESS_MS = 30000;   // give up when the remaining route has not shrunk by this much in this long
+const NO_PROGRESS_MIN = 0.03;
 
 const wrap = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
@@ -53,7 +55,7 @@ export class Navigator {
   }
 
   start(goal) {
-    Object.assign(this, { goal, path: [], state: "navigating", detail: "", recoveries: 0, failedPlans: 0, plannedAt: 0, lostSince: 0, progress: null });
+    Object.assign(this, { goal, path: [], state: "navigating", detail: "", recoveries: 0, failedPlans: 0, plannedAt: 0, lostSince: 0, progress: null, watch: null });
   }
 
   cancel() {
@@ -98,6 +100,7 @@ export class Navigator {
       }
       this.failedPlans = 0;
       this.path = planned.slice(1);
+      this.detail = planned.goalMoved ? "goal is against a wall or obstacle; heading for the nearest reachable spot" : "";
     }
 
     // Advance past waypoints that are reached, counting the distance the robot still covers after a stop.
@@ -108,6 +111,12 @@ export class Navigator {
       this.path.shift();
     }
     if (this.path.length === 0) return this.finish("done", "");
+
+    // Fail instead of walking forever when the route to the goal stops getting shorter.
+    let remaining = Math.hypot(this.path[0].x - robot.x, this.path[0].y - robot.y);
+    for (let i = 1; i < this.path.length; i++) remaining += Math.hypot(this.path[i].x - this.path[i - 1].x, this.path[i].y - this.path[i - 1].y);
+    if (!this.watch || remaining < this.watch.best - NO_PROGRESS_MIN) this.watch = { best: remaining, at: now };
+    else if (now - this.watch.at > NO_PROGRESS_MS) return this.finish("failed", "not making progress toward the goal");
 
     const target = this.path[0], distance = Math.hypot(target.x - robot.x, target.y - robot.y);
     // Aim against the drift the robot will pick up over the next stretch of walking.

@@ -14,7 +14,7 @@ export function VoiceControls() {
         title={voiceSupported ? `${label}. Audio is sent to Groq to interpret your command.` : "Microphone requires HTTPS or localhost and a supported browser."}
         onClick={recording ? finishListening : busy ? cancelVoice : startListening}
         className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${recording
-          ? "border-red-500 bg-red-600 text-white" : "border-zinc-700/80 text-zinc-300 hover:bg-zinc-800"}`}>
+          ? "border-red-500 bg-red-600 text-white ring-4 ring-red-500/25" : "border-zinc-700/80 text-zinc-300 hover:bg-zinc-800"}`}>
         {busy ? <svg viewBox="0 0 24 24" className="h-4 w-4 animate-spin" aria-hidden>
           <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.2" />
           <path d="M12 3a9 9 0 0 1 9 9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -25,10 +25,16 @@ export function VoiceControls() {
           </g>
         </svg>}
       </button>
-      <p role="status" aria-live="polite" className={`min-w-0 text-xs leading-snug ${voiceError ? "text-amber-400" : "text-zinc-400"}`}>
-        {recording ? "Listening…" : voicePhase === "processing" ? "Thinking…" : voicePhase === "requesting" ? "Allow microphone access…"
-          : voiceMessage || (voiceSupported ? "Tap to speak" : "Microphone unavailable")}
-      </p>
+      <div role="status" aria-live="polite" className="min-w-0 text-xs leading-snug">
+        {recording ? <p className="flex items-center gap-2 font-medium text-red-400">
+          <span aria-hidden className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-red-500" />
+          Recording — speak now
+        </p> : busy ? <p className="text-zinc-300">{voicePhase === "processing" ? "Working out what you said…" : "Allow microphone access…"}</p>
+          : <p className={voiceError ? "text-amber-400" : "text-zinc-400"}>
+            {voiceMessage || (voiceSupported ? "Tap the mic to speak" : "Microphone unavailable")}
+          </p>}
+        {recording && <p className="mt-0.5 text-zinc-500">Tap the mic again to send</p>}
+      </div>
     </div>
   );
 }

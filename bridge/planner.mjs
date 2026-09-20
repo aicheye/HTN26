@@ -1,6 +1,8 @@
 // Grid path planner over the arena. Pure functions, all units metres and radians, frontend frame.
 
 export const CELL_M = 0.02;
+export const EDGE_MARGIN_M = 0.07;  // the robot's centre cannot get closer than this to an arena wall (half its 0.125 m length plus a margin)
+export const START_RELIEF_M = 0.06;  // cells this close to the robot are free: it is already there and must be able to leave
 export const CLEARANCE_M = 0.1;  // robot half-diagonal (0.082) plus a margin: obstacles grow by this much
 
 function distanceToSegment(p, a, b) {
@@ -44,7 +46,9 @@ export function planPath(start, goal, arena, obstacles, clearance = CLEARANCE_M)
   const blocked = new Uint8Array(cols * rows);
   for (let i = 0; i < blocked.length; i++) {
     const p = centre(i);
-    blocked[i] = obstacles.some((o) => distanceToObstacle(p, o) < clearance) ? 1 : 0;
+    const nearWall = p.x < EDGE_MARGIN_M || p.y < EDGE_MARGIN_M || p.x > arena.width - EDGE_MARGIN_M || p.y > arena.length - EDGE_MARGIN_M;
+    blocked[i] = nearWall || obstacles.some((o) => distanceToObstacle(p, o) < clearance) ? 1 : 0;
+    if (Math.hypot(p.x - start.x, p.y - start.y) < START_RELIEF_M) blocked[i] = 0;
   }
   const startCell = cellOf(start);
   blocked[startCell] = 0;
@@ -112,5 +116,7 @@ export function planPath(start, goal, arena, obstacles, clearance = CLEARANCE_M)
     path.push(points[j]);
     i = j;
   }
+  // The goal was in an unreachable spot (against a wall or inside an obstacle's clearance), so the path ends at the nearest reachable one.
+  path.goalMoved = goalMoved;
   return path;
 }

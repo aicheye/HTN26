@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { WorldState } from "./types/world";
 import { ControlPad } from "./components/ControlPad";
 import { MockSceneControls } from "./components/MockSceneControls";
 import { MapView, type Renderer } from "./components/MapView";
@@ -8,6 +9,7 @@ import { VoiceControls } from "./components/VoiceControls";
 import { PanelSection } from "./components/PanelSection";
 import { CameraFeed } from "./components/CameraFeed";
 import { DEFAULT_CAMERA_URL } from "./state/cameraFeed";
+import { makeMockScenario } from "./data/mockScenarios";
 
 type Section = "controls" | "camera" | "telemetry" | "log" | "raw" | "settings";
 
@@ -190,7 +192,7 @@ export default function App() {
       </aside>
 
       <section className="relative min-w-0 flex-1 overflow-hidden bg-zinc-950">
-        {section === "camera" ? <CameraFeed url={feedUrl} /> : state ? (
+        {section === "camera" ? <CameraFeed url={feedUrl} /> : state && hasArena(state) ? (
           <>
             <MapView
               renderer={mainView}
@@ -224,9 +226,11 @@ export default function App() {
             </div>
           </>
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-zinc-500">
-            Waiting for first frame
-          </div>
+          <EmptyStage
+            title={status !== "live" ? "Connecting to the bridge" : state ? "Place the camera above the field" : "Waiting for the first frame"}
+            detail={status !== "live" ? "Check that the bridge is running and the WebSocket URL in Settings is correct."
+              : state ? "The map appears once the camera can see all four corner markers." : undefined}
+          />
         )}
       </section>
     </div>
@@ -324,6 +328,32 @@ function CodeIcon() {
         strokeLinejoin="round"
       />
     </svg>
+  );
+}
+
+/** The tracker reports a 0 x 0 arena until it has calibrated; drawing that would blow the corner markers up to fill the view. */
+function hasArena(state: { arena: { width: number; length: number } }) {
+  return state.arena.width > 0 && state.arena.length > 0;
+}
+
+/** An empty table with no robot or obstacles: a blurred 3D backdrop that hints at what will appear here. */
+const BACKDROP: WorldState = (() => {
+  const { robots: _r, obstacles: _o, arm: _a, goal: _g, path: _p, simulation: _s, ...scene } = makeMockScenario("empty");
+  return { ...scene, robots: [], obstacles: [] };
+})();
+
+function EmptyStage({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <div className="relative h-full w-full overflow-hidden">
+      <div aria-hidden className="pointer-events-none absolute -inset-6 opacity-70 blur-md">
+        <MapView renderer="3d" state={BACKDROP} selectedRobotId={null} compact />
+      </div>
+      <div className="absolute inset-0 bg-zinc-950/50" />
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-8 text-center">
+        <p className="text-base font-medium text-zinc-100">{title}</p>
+        {detail && <p className="max-w-xs text-sm leading-relaxed text-zinc-400">{detail}</p>}
+      </div>
+    </div>
   );
 }
 
