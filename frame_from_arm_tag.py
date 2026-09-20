@@ -16,6 +16,7 @@ uncertain; this one is exact only as far as the ruler is.
 """
 import argparse
 import sys
+import time
 
 import numpy as np
 
@@ -45,26 +46,17 @@ def main():
     args = ap.parse_args()
     tracker = Tracker(args.tracker)
     print(f"reading the arm base tag (id 5) from {tracker.host}...")
-    arm = None
-    import time
-    end = time.time() + 30
-    while time.time() < end and arm is None:
-        for u in tracker.units:
-            s = tracker.state(u)
-            if s and s.get("calibrated") and s.get("arm") and "x" in s["arm"]:
-                obs = tracker.observe_steady(1.0) or {}
-                arm = obs.get("arm") or {k: s["arm"][k] for k in ("x", "y", "z", "heading")}
-                mirrored = not s.get("zUp", True); unit = u
-                break
-        time.sleep(0.3)
-    if arm is None:
-        print("no calibrated camera reports the arm base tag (id 5) in 30 s. Is it in view and flat on the floor?")
+    got = tracker.wait_for_arm_tag(60.0)
+    if got is None:
+        print("no calibrated camera reported the arm base tag (id 5) in 60 s. Is it flat, in view, and is the camera calibrated (height shown on the page)?")
         open_camera_page(tracker.host)
         return 1
+    arm = {k: got[k] for k in ("x", "y", "z", "heading")}
+    mirrored, unit = got["mirrored"], got["unit"]
     frame = frame_from_tag(arm, args.offset[0], args.offset[1], args.turn, mirrored)
     frame.units = [unit]
     frame.save(args.out)
-    print(f"arm tag at floor ({arm['x']:.1f}, {arm['y']:.1f}) heading {arm['heading']:.0f} [camera {unit}]; base {args.offset[0]:+.1f} ahead, {args.offset[1]:+.1f} left, turned {args.turn:.0f} deg")
+    print(f"arm tag at floor ({arm['x']:.1f}, {arm['y']:.1f}) heading {arm['heading']:.0f} [camera {unit}, {got['sightings']} sightings]; base {args.offset[0]:+.1f} ahead, {args.offset[1]:+.1f} left, turned {args.turn:.0f} deg")
     print(frame.describe())
     print(f"saved {args.out}")
     return 0

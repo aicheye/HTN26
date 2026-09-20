@@ -77,6 +77,36 @@ class Tracker:
                 best = (key, obs)
         return None if best is None else best[1]
 
+    def wait_for_arm_tag(self, timeout=60.0, period=0.2, say=print):
+        """Poll until a calibrated camera reports the arm base tag (id 5), then return the median of a second
+        of sightings: {"x", "y", "z", "heading", "unit", "mirrored"}. None after timeout. Like the Sesame's
+        tag it is 3.6 cm and reported in few frames, so this collects sightings over time."""
+        end = time.time() + timeout
+        sightings = []
+        unit_seen, mirrored = None, False
+        last_word = 0.0
+        while time.time() < end:
+            for u in self.units:
+                s = self.state(u)
+                if s and s.get("calibrated") and s.get("arm") and "x" in s["arm"]:
+                    sightings.append((u, s["arm"], not s.get("zUp", True)))
+            if sightings:
+                unit_seen = sightings[-1][0]
+                if len(sightings) >= 5 or time.time() - end + timeout > 8 and len(sightings) >= 2:
+                    break
+            if say and time.time() - last_word > 5:
+                say(f"   waiting for a calibrated camera to report the arm base tag (id 5)... {len(sightings)} sightings so far")
+                last_word = time.time()
+            time.sleep(period)
+        if not sightings:
+            return None
+        same = [a for u, a, m in sightings if u == unit_seen]
+        h = np.radians([a["heading"] for a in same])
+        return {"x": float(np.median([a["x"] for a in same])), "y": float(np.median([a["y"] for a in same])),
+                "z": float(np.median([a.get("z", 0.0) for a in same])),
+                "heading": float(np.degrees(np.arctan2(np.median(np.sin(h)), np.median(np.cos(h))))),
+                "unit": unit_seen, "mirrored": sightings[-1][2], "sightings": len(same)}
+
     def wait_for_robot(self, timeout=30.0, period=0.2, say=print):
         """Poll until some camera reports the Sesame (or the last sighting is still fresh), then return the
         steady median over the next second. None after timeout. The tag is missed in most frames at this
