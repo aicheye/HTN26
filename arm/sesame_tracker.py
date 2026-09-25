@@ -20,11 +20,12 @@ import urllib.request
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 
 
 def default_host():
     try:
-        with open(os.path.join(HERE, "pi", "host")) as f:
+        with open(os.path.join(ROOT, "pi", "host")) as f:
             return f.read().strip() or "qnxpi78.local"
     except OSError:
         return "qnxpi78.local"
@@ -251,23 +252,9 @@ def open_camera_page(host=None, unit=3, units=None):
     global _page_server
     import subprocess
     import webbrowser
-    client = os.path.join(HERE, "pi", "client")
+    client = os.path.join(ROOT, "pi", "client")
     if not os.path.isfile(os.path.join(client, "demo.html")):
-        # Sean removed demo.html in 535f77d ("Use the web UI as the only live view"); restore it from the commit
-        # before that, locally and untracked. floor.js next to it is still on his branch.
-        os.makedirs(client, exist_ok=True)
-        try:
-            subprocess.run(["git", "fetch", "-q", "origin", "devel/sean"], cwd=HERE, check=False, timeout=30)
-            html = subprocess.run(["git", "show", "535f77d~1:pi/client/demo.html"], cwd=HERE, capture_output=True, text=True, timeout=30)
-            if html.returncode == 0 and "<title>" in html.stdout.lower():
-                with open(os.path.join(client, "demo.html"), "w") as f:
-                    f.write(html.stdout)
-            if not os.path.isfile(os.path.join(client, "floor.js")):
-                subprocess.run(["git", "restore", "--source=origin/devel/sean", "--", "pi/client/floor.js"], cwd=HERE, check=False, timeout=30)
-        except Exception:
-            pass
-    if not os.path.isfile(os.path.join(client, "demo.html")):
-        print("   (Sean's camera page could not be restored: pi/client/demo.html missing)")
+        print("   (no camera page: pi/client/demo.html was replaced by the web app, sh pi/live.sh)")
         return False
     if not _port_open(5500):
         _page_server = subprocess.Popen([sys.executable, "-m", "http.server", "5500", "--bind", "127.0.0.1"], cwd=client,
@@ -299,15 +286,14 @@ def ensure_trackers(tracker, say=print):
     up = alive_units(tracker)
     if up:
         return up
-    if not (os.path.isfile(os.path.join(HERE, "pi", "common.sh")) and os.path.isdir(os.path.join(HERE, "pi", "tracker"))):
-        say("fetching Sean's Pi files from origin/devel/sean (his code, do not commit it from here)")
-        subprocess.run(["git", "fetch", "-q", "origin", "devel/sean"], cwd=HERE, check=False)
-        subprocess.run(["git", "restore", "--source=origin/devel/sean", "--", "pi"], cwd=HERE, check=False)
+    if not (os.path.isfile(os.path.join(ROOT, "pi", "common.sh")) and os.path.isdir(os.path.join(ROOT, "pi", "tracker"))):
+        say("pi/ is missing from this checkout")
+        return []
     if not os.path.exists(os.path.expanduser("~/.ssh/htn_pi")):
         say("the Pi would ask for a password. Run once:  sh pi/setup-key.sh   (password qnxuser), then run this again.")
         return []
     say(f"no tracker answers at {tracker.host}: starting both on the Pi (copy + compile, 1-3 minutes; log: pi/trackers-live.log)")
-    with open(os.path.join(HERE, "pi", "trackers-live.log"), "ab") as log:
+    with open(os.path.join(ROOT, "pi", "trackers-live.log"), "ab") as log:
         subprocess.Popen(["sh", "start_trackers.sh"], cwd=HERE, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
     for i in range(240):
         time.sleep(1)
@@ -316,7 +302,7 @@ def ensure_trackers(tracker, say=print):
             say(f"   trackers up after {i + 1} s"); return up
         if i % 15 == 14:
             try:
-                tail = open(os.path.join(HERE, "pi", "trackers-live.log")).read().strip().splitlines()[-1][:110]
+                tail = open(os.path.join(ROOT, "pi", "trackers-live.log")).read().strip().splitlines()[-1][:110]
             except Exception:
                 tail = ""
             say(f"   still starting ({i + 1} s)... {tail}")

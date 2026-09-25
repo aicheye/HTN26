@@ -19,17 +19,17 @@ the state as a label and never sends a command.
 ## Run
 
 ```
-uv pip install --python .venv/bin/python scipy            # opencv and numpy come with lerobot
-.venv/bin/python -m nav.synth                              # ~70 s: recordings/synth-{empty,obstacles,hand,lights,driving}
-.venv/bin/python -m nav.run --replay recordings/synth-obstacles            # live window, paced at the recorded rate
-.venv/bin/python -m nav.run --replay recordings/synth-driving --record out.mp4 --headless --fast
-.venv/bin/python -m nav.verify recordings/synth-*                          # all checks, exit 1 on any FAIL
-.venv/bin/python -m nav.run --replay recordings/synth-obstacles --objects  # with Sean's object detector as a second layer
-.venv/bin/python -m nav.verify recordings/synth-* --objects                # the same checks with the detector on
+uv pip install --python arm/.venv/bin/python scipy            # opencv and numpy come with lerobot
+arm/.venv/bin/python -m nav.synth                              # ~70 s: recordings/synth-{empty,obstacles,hand,lights,driving}
+arm/.venv/bin/python -m nav.run --replay recordings/synth-obstacles            # live window, paced at the recorded rate
+arm/.venv/bin/python -m nav.run --replay recordings/synth-driving --record out.mp4 --headless --fast
+arm/.venv/bin/python -m nav.verify recordings/synth-*                          # all checks, exit 1 on any FAIL
+arm/.venv/bin/python -m nav.run --replay recordings/synth-obstacles --objects  # with Sean's object detector as a second layer
+arm/.venv/bin/python -m nav.verify recordings/synth-* --objects                # the same checks with the detector on
 ```
 
 The detector is Sean's, on `origin/devel/sean`: `git restore --source=origin/devel/sean -- vision`, then
-`uv pip install --python .venv/bin/python onnxruntime` and the MobileSAM model into `vision/models`
+`uv pip install --python arm/.venv/bin/python onnxruntime` and the MobileSAM model into `vision/models`
 (`sh vision/setup.sh` downloads it). Without the model the colour and parallax cues still run.
 
 Real clips: `bash pi/record.sh`, `bash pi/pull-recordings.sh`, then the same commands on `recordings/rec-NNN`.

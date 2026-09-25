@@ -6,8 +6,8 @@
 #   defaults: 63 63, the saved lens codes, 10.5
 # States: http://<pi>:8003/state.json and :8004/state.json. Ctrl-C stops both.
 W=${1:-63}; H=${2:-63}; LENS=${3:--}; ROBOT_HEIGHT=${4:-10.5}
-cd "$(dirname "$0")" || exit 1
-[ -f pi/common.sh ] && [ -d pi/tracker ] || { echo "pi/ (Sean's tracker and Pi scripts) is not in this checkout: it lives on origin/devel/sean. Merge or check out that branch first."; exit 1; }
+cd "$(dirname "$0")/.." || exit 1
+[ -f pi/common.sh ] && [ -d pi/tracker ] || { echo "pi/ is missing from this checkout"; exit 1; }
 . pi/common.sh
 # common.sh looks for the host file next to itself only when run from pi/; sourced from here, read it explicitly.
 [ -f pi/host ] && PI_HOST=$(cat pi/host) && PI=qnxuser@$PI_HOST

@@ -288,6 +288,7 @@ def main(argv=None):
     if args.replay:
         source = ReplaySource(args.replay, args.fast, args.loop)
     else:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "arm"))
         from sesame_tracker import default_host
         source = LiveSource(args.live or default_host(), args.unit)
         print(f"live: {source.url} (frames arrive at the Pi's rate, about 2 a second)")

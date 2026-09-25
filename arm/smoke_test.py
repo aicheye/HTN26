@@ -14,7 +14,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-os.chdir(HERE)
+os.chdir(os.path.dirname(HERE))
 PY = sys.executable
 results = []
 
@@ -44,12 +44,12 @@ def s_env():
 
 
 def s_solver():
-    out = run([PY, "-m", "pytest", "-q", "test_so101_ik.py"])
+    out = run([PY, "-m", "pytest", "-q", "arm/test_so101_ik.py"])
     return out.strip().splitlines()[-1]
 
 
 def s_pickup():
-    out = run([PY, "test_pickup.py"])
+    out = run([PY, "arm/test_pickup.py"])
     return out.strip().splitlines()[-1]
 
 
@@ -84,7 +84,7 @@ def s_nav():
 
 def s_objects():
     if not os.path.isfile("vision/detect.py"):
-        return "SKIP vision/ not in this checkout (git restore --source=origin/devel/sean -- vision)"
+        return "SKIP vision/ not in this checkout"
     out = run([PY, "-m", "nav.verify", "recordings/synth-obstacles", "--objects"], timeout=900)
     line = [l for l in out.splitlines() if "object detector" in l][-1]
     if "PASS" not in line:

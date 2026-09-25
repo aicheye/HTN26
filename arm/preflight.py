@@ -30,8 +30,8 @@ def main():
     else:
         row(False, "arm (no USB serial device found)", "plug the SO-101 in, or set SO101_PORT=/dev/... if it is on an unusual name")
     ready &= row(os.path.exists("calibration/so_follower/follower.json"), "arm motor calibration (calibration/so_follower/follower.json)", "it ships with the repo; if it is gone, lerobot-calibrate --robot.type=so_follower")
-    has_pi = os.path.isfile("pi/common.sh") and os.path.isdir("pi/tracker")
-    row(has_pi, "Sean's Pi tracker files (pi/)", "sh run.sh trackers fetches them from origin/devel/sean")
+    has_pi = os.path.isfile("../pi/common.sh") and os.path.isdir("../pi/tracker")
+    row(has_pi, "Sean's Pi tracker files (pi/)", "pi/ is missing from this checkout")
     from sesame_tracker import Tracker
     t = Tracker()
     seen = {u: t.state(u) for u in t.units}

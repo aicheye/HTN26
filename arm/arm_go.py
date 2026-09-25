@@ -57,15 +57,11 @@ def main():
     tracker = Tracker()
     up = alive_units(tracker)
     if not up:
-        if not (os.path.isfile("pi/common.sh") and os.path.isdir("pi/tracker")):
-            print("fetching Sean's Pi files from origin/devel/sean (his code, do not commit it from here)")
-            subprocess.run(["git", "fetch", "-q", "origin", "devel/sean"], check=False)
-            subprocess.run(["git", "restore", "--source=origin/devel/sean", "--", "pi"], check=False)
         if not os.path.exists(os.path.expanduser("~/.ssh/htn_pi")):
             print("the Pi would ask for a password. Run once:  sh pi/setup-key.sh   (password qnxuser), then run this again.")
             return 1
         print(f"no tracker answers at {tracker.host}: starting both on the Pi (copy + compile, 1-3 minutes; log: pi/trackers-live.log)")
-        with open("pi/trackers-live.log", "ab") as log:
+        with open("../pi/trackers-live.log", "ab") as log:
             # detached: the trackers keep running on the Pi after this program ends or crashes
             subprocess.Popen(["sh", "start_trackers.sh"], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
         for i in range(240):
@@ -75,7 +71,7 @@ def main():
                 print(f"   trackers up after {i + 1} s"); break
             if i % 15 == 14:
                 try:
-                    tail = open("pi/trackers-live.log").read().strip().splitlines()[-1][:110]
+                    tail = open("../pi/trackers-live.log").read().strip().splitlines()[-1][:110]
                 except Exception:
                     tail = ""
                 print(f"   still starting ({i + 1} s)... {tail}")
@@ -84,7 +80,7 @@ def main():
     # focus: the QNX camera driver has no autofocus; the tracker sets the lens from a code saved on the Pi by
     # pi/run-focus.sh and prints "lens code N ...: set" at startup. Warn when a camera started without one.
     try:
-        log = open("pi/trackers-live.log").read()
+        log = open("../pi/trackers-live.log").read()
         for u in up:
             if f"[cam{u}] lens code" not in log:
                 print(f"WARNING: camera {u} started with NO lens code (focus not set). Run once, aimed at the board:  sh pi/run-focus.sh {u}")
