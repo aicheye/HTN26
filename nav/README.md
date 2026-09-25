@@ -11,6 +11,7 @@ Python, one file per pipeline stage. Units are centimetres and degrees everywher
 | `run.py` | the loop: `--replay` a recording, `--live` the Pi, `--record` an mp4, `--headless`, `--summary` |
 | `verify.py` | runs clips through the same `Pipeline` and checks the brief's thresholds |
 | `synth.py` | synthetic recordings in the Pi's format, with ground truth, for work without hardware |
+| `objects.py` | second obstacle layer: Sean's object detector (`vision/detect.py`, MobileSAM when its model is present) run in a worker process on our frames with our frozen camera pose, every few seconds; labelled outlines OR-ed into the costmap. `--objects` on `run.py` and `verify.py` |
 
 Not built yet: robot control (stage 5), the policy (6) and the state machine with commands (7). `run.py` shows
 the state as a label and never sends a command.
@@ -23,7 +24,13 @@ uv pip install --python .venv/bin/python scipy            # opencv and numpy com
 .venv/bin/python -m nav.run --replay recordings/synth-obstacles            # live window, paced at the recorded rate
 .venv/bin/python -m nav.run --replay recordings/synth-driving --record out.mp4 --headless --fast
 .venv/bin/python -m nav.verify recordings/synth-*                          # all checks, exit 1 on any FAIL
+.venv/bin/python -m nav.run --replay recordings/synth-obstacles --objects  # with Sean's object detector as a second layer
+.venv/bin/python -m nav.verify recordings/synth-* --objects                # the same checks with the detector on
 ```
+
+The detector is Sean's, on `origin/devel/sean`: `git restore --source=origin/devel/sean -- vision`, then
+`uv pip install --python .venv/bin/python onnxruntime` and the MobileSAM model into `vision/models`
+(`sh vision/setup.sh` downloads it). Without the model the colour and parallax cues still run.
 
 Real clips: `bash pi/record.sh`, `bash pi/pull-recordings.sh`, then the same commands on `recordings/rec-NNN`.
 For `verify.py` on a real clip pass `--board-cm W H` (tape measure between the tag centres) and

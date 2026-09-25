@@ -1,0 +1,169 @@
+<!doctype html>
+<!-- Manual controller served by bridge.mjs at http://<laptop>:8080/. Moves go through the bridge's /ws commands, so
+     with drive mode "software" the robot walks with gait.mjs and the trim saved in drive.json, where the firmware's
+     captive portal uses the firmware gaits. Hold a direction (or an arrow key / WASD) to walk, release to stop. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Sesame controller</title>
+<style>
+  :root { color-scheme: dark; --bg: #14161a; --panel: #1f2329; --line: #333a44; --text: #e8eaed; --dim: #9aa3ae; --accent: #4da3ff; --stop: #e5484d; --ok: #3fb950; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text); font: 15px/1.4 system-ui, sans-serif; }
+  main { max-width: 440px; margin: 0 auto; display: grid; gap: 14px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  h2 { margin: 0 0 10px; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
+  button, select { font: inherit; color: var(--text); background: #2a3038; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+  button { cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none; }
+  button:active, button.held { background: var(--accent); border-color: var(--accent); color: #06121f; }
+  #status { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--dim); }
+  #status b { color: var(--text); font-weight: 600; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--stop); margin-right: 5px; }
+  .dot.on { background: var(--ok); }
+  #error { color: var(--stop); font-size: 13px; min-height: 1.4em; }
+  .dpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 280px; margin: 0 auto; }
+  .dpad button { aspect-ratio: 1; font-size: 26px; }
+  .dpad .stop { background: var(--stop); border-color: var(--stop); font-size: 14px; font-weight: 700; }
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .row label { flex: 0 0 84px; color: var(--dim); font-size: 13px; }
+  .row input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+  .row output { flex: 0 0 48px; text-align: right; font-variant-numeric: tabular-nums; }
+  .row select { flex: 1; min-width: 0; }
+  .hint { margin: 8px 0 0; font-size: 12px; color: var(--dim); }
+  .poses { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .poses button { padding: 9px 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <section>
+    <div id="status">
+      <span><span class="dot" id="bridge-dot"></span>bridge</span>
+      <span>drive <b id="drive-label">?</b></span>
+      <span>robot <b id="robot-label">?</b></span>
+    </div>
+    <div id="error"></div>
+  </section>
+
+  <section>
+    <h2>Move</h2>
+    <div class="dpad">
+      <span></span><button data-move="forward">&#9650;</button><span></span>
+      <button data-move="left">&#9664;</button><button class="stop" id="stop">STOP</button><button data-move="right">&#9654;</button>
+      <span></span><button data-move="backward">&#9660;</button><span></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Drive</h2>
+    <div class="row"><label for="mode">Gaits from</label>
+      <select id="mode">
+        <option value="software/trot">bridge: trot</option>
+        <option value="software/firmware">bridge: firmware frames</option>
+        <option value="firmware/">robot firmware</option>
+      </select>
+    </div>
+    <div class="row"><label for="trim">Trim</label><input id="trim" type="range" min="-0.5" max="0.5" step="0.01"><output id="trim-value"></output></div>
+    <div class="row"><label for="delay">Frame delay</label><input id="delay" type="range" min="20" max="300" step="10"><output id="delay-value"></output></div>
+    <p class="hint">Trim above 0 shortens the right stride (fixes veering left), below 0 the left stride. Trim and frame delay apply to the bridge gaits only. Changes are saved to drive.json and stop the robot.</p>
+  </section>
+
+  <section>
+    <h2>Poses</h2>
+    <div class="poses" id="poses"></div>
+  </section>
+</main>
+
+<script>
+const POSES = ["rest", "stand", "wave", "dance", "swim", "point", "pushup", "bow", "cute", "freaky", "worm", "shake", "shrug", "dead", "crab"];
+const KEYS = { ArrowUp: "forward", w: "forward", ArrowDown: "backward", s: "backward", ArrowLeft: "left", a: "left", ArrowRight: "right", d: "right" };
+const $ = (id) => document.getElementById(id);
+let socket = null, nextId = 0, held = null;
+
+function connect() {
+  socket = new WebSocket(`ws://${location.host}/ws`);
+  socket.onopen = () => { $("bridge-dot").classList.add("on"); loadDrive(); };
+  socket.onclose = () => { $("bridge-dot").classList.remove("on"); release(); setTimeout(connect, 1000); };
+  socket.onmessage = (event) => {
+    const envelope = JSON.parse(event.data);
+    if (envelope.type === "ack") $("error").textContent = envelope.data.ok ? "" : envelope.data.error;
+    else if (envelope.type === "state") {
+      const robot = envelope.data.robots[0];
+      $("robot-label").textContent = robot ? robot.mode + (robot.pose ? ` (${robot.pose})` : "") : "not seen by the tracker";
+    }
+  };
+}
+
+function send(data) {
+  if (socket?.readyState !== WebSocket.OPEN) { $("error").textContent = "bridge not connected"; return; }
+  socket.send(JSON.stringify({ type: "command", data: { id: `web-${nextId++}`, ts: Date.now(), robotId: "sesame-1", ...data } }));
+}
+
+function press(direction) {
+  if (held === direction) return;
+  held = direction;
+  for (const button of document.querySelectorAll("[data-move]")) button.classList.toggle("held", button.dataset.move === direction);
+  send({ type: direction });
+}
+
+function release() {
+  if (!held) return;
+  held = null;
+  for (const button of document.querySelectorAll("[data-move]")) button.classList.remove("held");
+  send({ type: "stop" });
+}
+
+for (const button of document.querySelectorAll("[data-move]")) {
+  button.addEventListener("pointerdown", (event) => { button.setPointerCapture(event.pointerId); press(button.dataset.move); });
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) button.addEventListener(type, release);
+  button.addEventListener("contextmenu", (event) => event.preventDefault());
+}
+$("stop").addEventListener("click", () => { held = null; send({ type: "stop" }); });
+addEventListener("keydown", (event) => {
+  if (event.repeat || event.target.matches("input, select")) return;
+  if (event.key === " ") { event.preventDefault(); held = null; send({ type: "stop" }); }
+  else if (KEYS[event.key]) { event.preventDefault(); press(KEYS[event.key]); }
+});
+addEventListener("keyup", (event) => { if (KEYS[event.key] === held) release(); });
+addEventListener("blur", release);
+document.addEventListener("visibilitychange", () => { if (document.hidden) release(); });
+
+for (const name of POSES) {
+  const button = document.createElement("button");
+  button.textContent = name;
+  button.addEventListener("click", () => { held = null; send({ type: "pose", pose: name }); });
+  $("poses").append(button);
+}
+
+function showDrive(drive) {
+  $("drive-label").textContent = drive.mode === "software" ? `bridge ${drive.gait}, trim ${drive.trim}` : "robot firmware";
+  $("mode").value = drive.mode === "software" ? `software/${drive.gait}` : "firmware/";
+  $("trim").value = drive.trim; $("trim-value").textContent = Number(drive.trim).toFixed(2);
+  $("delay").value = drive.frameDelay; $("delay-value").textContent = `${drive.frameDelay} ms`;
+  $("trim").disabled = $("delay").disabled = drive.mode !== "software";
+}
+
+async function loadDrive() {
+  try { showDrive(await (await fetch("/drive")).json()); } catch { $("error").textContent = "cannot read /drive"; }
+}
+
+async function saveDrive(changes) {
+  held = null;  // the bridge stops the gait when the drive settings change
+  for (const button of document.querySelectorAll("[data-move]")) button.classList.remove("held");
+  try { showDrive(await (await fetch("/drive", { method: "POST", body: JSON.stringify(changes) })).json()); } catch { $("error").textContent = "cannot save /drive"; }
+}
+
+$("mode").addEventListener("change", () => {
+  const [mode, gait] = $("mode").value.split("/");
+  saveDrive(gait ? { mode, gait } : { mode });
+});
+$("trim").addEventListener("input", () => { $("trim-value").textContent = Number($("trim").value).toFixed(2); });
+$("trim").addEventListener("change", () => saveDrive({ trim: Number($("trim").value) }));
+$("delay").addEventListener("input", () => { $("delay-value").textContent = `${$("delay").value} ms`; });
+$("delay").addEventListener("change", () => saveDrive({ frameDelay: Number($("delay").value) }));
+
+connect();
+</script>
+</body>
+</html>

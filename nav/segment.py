@@ -16,6 +16,7 @@ MIN_AREA_CM2 = 4.0
 PERSIST_S = 0.15                         # consecutive occupancy to enter, and to leave, the map
 ROBOT_MASK_SCALE = 1.35                  # robot body mask dilation: swallows its shadow and servo wires
 TAG_MASK_SCALE = 0.85                    # corner tags are masked by a disc this many tag edges across
+ROBOT_RADIUS_MAX_TAGS = 3.0              # a body cannot be wider than this many robot-tag edges: the blob merged with something else
 
 
 class Segmenter:
@@ -105,26 +106,36 @@ class Segmenter:
         return out
 
     def measure_robot_radius(self, rect_bgr, valid, robot):
-        """Robot body radius (cm) from the chroma outlier blob around the robot tag, with the robot unmasked.
-        Called at boot while the robot stands still. None when no blob sits under the tag."""
+        """Robot body radius (cm) at boot, while the robot stands still: the radius of the blob under the
+        robot tag that is darker than the board (the body and legs are dark; shadows are handled by the
+        margin the planner adds). Chroma is not used here because projected light and coloured objects
+        next to the robot merge into a chroma blob. Capped at ROBOT_RADIUS_MAX_TAGS tag edges.
+        None when nothing dark sits under the tag."""
+        lab = cv2.cvtColor(rect_bgr, cv2.COLOR_BGR2LAB)
+        L = lab[..., 0].astype(np.float32)
         fit_mask = self.arena & valid & ~self.tag_mask
-        m2 = self.chroma_outliers(rect_bgr, fit_mask)
-        raw = ((m2 > CHI2_99) & fit_mask).astype(np.uint8)
-        raw = cv2.morphologyEx(raw, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
-        n, labels = cv2.connectedComponents(raw, connectivity=8)
+        board = np.median(L[fit_mask]) if fit_mask.any() else 128.0
+        spread = np.median(np.abs(L[fit_mask] - board)) * 1.4826 + 1.0 if fit_mask.any() else 10.0
+        dark = ((L < board - max(4 * spread, 25.0)) & self.arena & valid).astype(np.uint8)
+        dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+        n, labels = cv2.connectedComponents(dark, connectivity=8)
         u, v = self.g.world_to_rect([[robot["x"], robot["y"]]])[0]
         ui, vi = int(round(u)), int(round(v))
         if not (0 <= vi < self.shape[0] and 0 <= ui < self.shape[1]):
             return None
         k = labels[vi, ui]
-        if k == 0:                                     # tag centre not in a blob: try the nearest blob pixel within 2 tag edges
+        if k == 0:                                     # the tag itself is white/black: take the nearest dark blob within a tag edge
             ys, xs = np.nonzero(labels)
             if len(xs) == 0:
                 return None
             d = np.hypot(xs - u, ys - v)
-            if d.min() > 2 * TAG_CM["robot"] * self.px_per_cm:
+            if d.min() > TAG_CM["robot"] * self.px_per_cm:
                 return None
             k = labels[ys[d.argmin()], xs[d.argmin()]]
         ys, xs = np.nonzero(labels == k)
-        r = np.percentile(np.hypot(xs - u, ys - v), 97) / self.px_per_cm
+        r = np.percentile(np.hypot(xs - u, ys - v), 95) / self.px_per_cm
+        cap = ROBOT_RADIUS_MAX_TAGS * TAG_CM["robot"]
+        if r > cap:                                    # the blob ran into a shadow, a dark object or the board edge
+            print(f"robot radius blob is {r:.1f} cm, capped at {cap:.1f} cm (the body merged with something else)")
+            r = cap
         return float(max(r, TAG_CM["robot"]))
